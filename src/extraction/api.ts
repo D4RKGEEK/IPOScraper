@@ -1,14 +1,14 @@
 /**
- * api.ts — the REST API (PRD §7, §11.10). Thin: reads/writes Mongo, presigns R2,
- * enqueues. No business logic. All responses are detailed by design.
- * Auth: a single X-API-Key header — this is an internal service.
+ * api.ts — the extraction REST API (PRD §7) as an Express Router mounted at
+ * /v1 inside the main scraper app (PRD §2 explicitly allows Express). Thin:
+ * reads/writes Mongo, presigns R2, enqueues. No business logic.
+ * Auth: a single X-API-Key header on every /v1 route.
  */
-import Fastify, { type FastifyInstance, type FastifyRequest } from 'fastify';
+import { Router, type Request, type Response, type NextFunction } from 'express';
 import { ObjectId, type Db, type Document as MongoDoc } from 'mongodb';
 import { CFG } from './config';
 import type { R2 } from './r2';
 import { sha256, computeProgress } from './state';
-import { FIELDS } from './registry/fields';
 import { validateField } from './validate';
 import { mergeIpoRecord } from './merge';
 import { janitor } from './janitor';
@@ -17,30 +17,35 @@ import { logEvent } from './db';
 const LOCK_FIELDS = { lockedBy: 0, lockedAt: 0 };
 const TERMINAL = ['done', 'done_with_review', 'failed_poison'];
 
-export function buildApi(db: Db, r2: R2): FastifyInstance {
-  const app = Fastify({ logger: false });
+export function buildExtractionRouter(db: Db, r2: R2): Router {
+  const router = Router();
   const documents = () => db.collection('documents');
   const reviews = () => db.collection('review_queue');
 
-  app.addHook('onRequest', async (req, reply) => {
+  router.use((req: Request, res: Response, next: NextFunction) => {
     if (req.headers['x-api-key'] !== CFG.apiKey) {
-      await reply.status(401).send({ error: 'invalid or missing X-API-Key' });
+      res.status(401).json({ error: 'invalid or missing X-API-Key' });
+      return;
     }
+    next();
   });
 
+  const h = (fn: (req: Request, res: Response) => Promise<unknown>) =>
+    (req: Request, res: Response, next: NextFunction) => {
+      fn(req, res).catch(next);
+    };
+
   // ── §7.1 POST /v1/documents — submit a PDF by link ───────────────────────────
-  app.post('/v1/documents', async (req, reply) => {
+  router.post('/documents', h(async (req, res) => {
     const body = (req.body ?? {}) as { pdfUrl?: string; ipoSlug?: string; meta?: object; webhookUrl?: string };
     if (!body.pdfUrl || !/^https?:\/\//.test(body.pdfUrl)) {
-      return reply.status(400).send({ error: 'pdfUrl (http/https) is required' });
+      return res.status(400).json({ error: 'pdfUrl (http/https) is required' });
     }
     const id = sha256(body.pdfUrl);
     const existing = await documents().findOne({ _id: id as never });
     if (existing) {
       // Dedupe by sourceUrl — re-submit forces nothing (§7.1, fallback #29).
-      return reply.status(202).send({
-        documentId: id, status: existing.status, deduped: true, statusUrl: `/v1/documents/${id}`,
-      });
+      return res.status(202).json({ documentId: id, status: existing.status, deduped: true, statusUrl: `/v1/documents/${id}` });
     }
     try {
       await documents().insertOne({
@@ -59,19 +64,19 @@ export function buildApi(db: Db, r2: R2): FastifyInstance {
       if (!String(e).includes('E11000')) throw e; // racing duplicate → fall through
     }
     await logEvent(id, 'submitted', { sourceUrl: body.pdfUrl, ipoSlug: body.ipoSlug ?? null });
-    return reply.status(202).send({ documentId: id, status: 'queued', deduped: false, statusUrl: `/v1/documents/${id}` });
-  });
+    return res.status(202).json({ documentId: id, status: 'queued', deduped: false, statusUrl: `/v1/documents/${id}` });
+  }));
 
   // ── §7.2 GET /v1/documents/:id — the detailed progress answer (main poll) ────────
-  app.get('/v1/documents/:id', async (req, reply) => {
-    const id = (req.params as { id: string }).id;
+  router.get('/documents/:id', h(async (req, res) => {
+    const id = req.params.id as string;
     const doc = await documents().findOne({ _id: id as never }, { projection: LOCK_FIELDS });
-    if (!doc) return reply.status(404).send({ error: 'document not found', id });
-    return reply.send(detailPayload(doc));
-  });
+    if (!doc) return res.status(404).json({ error: 'document not found', id });
+    return res.json(detailPayload(doc));
+  }));
 
   // ── GET /v1/documents — list/filter ─────────────────────────────────────────
-  app.get('/v1/documents', async (req) => {
+  router.get('/documents', h(async (req, res) => {
     const q = req.query as { status?: string; ipoSlug?: string; page?: string };
     const filter: Record<string, unknown> = {};
     if (q.status) filter.status = q.status;
@@ -82,33 +87,33 @@ export function buildApi(db: Db, r2: R2): FastifyInstance {
     const data = await documents()
       .find(filter, { projection: { ...LOCK_FIELDS, fields: 0, stages: 0 } })
       .sort({ createdAt: -1 }).skip((page - 1) * limit).limit(limit).toArray();
-    return { data: data.map((d) => ({ documentId: String(d._id), ...d, _id: undefined })), pagination: { page, limit, total } };
-  });
+    return res.json({ data: data.map((d) => ({ documentId: String(d._id), ...d, _id: undefined })), pagination: { page, limit, total } });
+  }));
 
   // ── GET /v1/documents/:id/result — 404-with-status if not terminal ───────────────
-  app.get('/v1/documents/:id/result', async (req, reply) => {
-    const id = (req.params as { id: string }).id;
+  router.get('/documents/:id/result', h(async (req, res) => {
+    const id = req.params.id as string;
     const doc = await documents().findOne({ _id: id as never }, { projection: LOCK_FIELDS });
-    if (!doc) return reply.status(404).send({ error: 'document not found', id });
+    if (!doc) return res.status(404).json({ error: 'document not found', id });
     if (!TERMINAL.includes(doc.status as string)) {
-      return reply.status(404).send({ error: 'not terminal yet', status: doc.status, progress: doc.progress });
+      return res.status(404).json({ error: 'not terminal yet', status: doc.status, progress: doc.progress });
     }
-    return reply.send({ documentId: id, docType: doc.docType, status: doc.status, fields: doc.fields ?? {}, cost: doc.cost ?? {} });
-  });
+    return res.json({ documentId: id, docType: doc.docType, status: doc.status, fields: doc.fields ?? {}, cost: doc.cost ?? {} });
+  }));
 
   // ── GET /v1/documents/:id/events — audit trail ────────────────────────────────
-  app.get('/v1/documents/:id/events', async (req) => {
-    const id = (req.params as { id: string }).id;
+  router.get('/documents/:id/events', h(async (req, res) => {
+    const id = req.params.id as string;
     const events = await db.collection('events').find({ docHash: id }).sort({ at: -1 }).limit(500).toArray();
-    return { documentId: id, events };
-  });
+    return res.json({ documentId: id, events });
+  }));
 
   // ── POST /v1/documents/:id/retry — re-enqueue (§7.3) ────────────────────────────
-  app.post('/v1/documents/:id/retry', async (req, reply) => {
-    const id = (req.params as { id: string }).id;
+  router.post('/documents/:id/retry', h(async (req, res) => {
+    const id = req.params.id as string;
     const force = !!((req.body ?? {}) as { force?: boolean }).force;
     const doc = await documents().findOne({ _id: id as never });
-    if (!doc) return reply.status(404).send({ error: 'document not found', id });
+    if (!doc) return res.status(404).json({ error: 'document not found', id });
 
     if (force) {
       // Wipe and redo everything.
@@ -129,29 +134,29 @@ export function buildApi(db: Db, r2: R2): FastifyInstance {
       );
     }
     await logEvent(id, 'retry', { force });
-    return reply.status(202).send({ documentId: id, status: 'queued', force, statusUrl: `/v1/documents/${id}` });
-  });
+    return res.status(202).json({ documentId: id, status: 'queued', force, statusUrl: `/v1/documents/${id}` });
+  }));
 
   // ── GET /v1/ipos/:slug — the merged canonical IPO record ────────────────────────
-  app.get('/v1/ipos/:slug', async (req, reply) => {
-    const slug = (req.params as { slug: string }).slug;
+  router.get('/ipos/:slug', h(async (req, res) => {
+    const slug = req.params.slug as string;
     const ipo = await db.collection('ipos').findOne({ _id: slug as never });
-    if (!ipo) return reply.status(404).send({ error: 'ipo not found', slug });
-    return reply.send(ipo);
-  });
+    if (!ipo) return res.status(404).json({ error: 'ipo not found', slug });
+    return res.json(ipo);
+  }));
 
-  app.get('/v1/ipos', async (req) => {
+  router.get('/ipos', h(async (req, res) => {
     const q = req.query as Record<string, string>;
     const filter: Record<string, unknown> = {};
     if (q['completeness.needsReview'] !== undefined) {
       filter['completeness.needsReview'] = parseInt(q['completeness.needsReview'], 10);
     }
     const data = await db.collection('ipos').find(filter).sort({ updatedAt: -1 }).limit(200).toArray();
-    return { data };
-  });
+    return res.json({ data });
+  }));
 
   // ── GET /v1/reviews — humans resolve in seconds (presigned PNGs, 15-min) ─────────
-  app.get('/v1/reviews', async (req) => {
+  router.get('/reviews', h(async (req, res) => {
     const status = (req.query as { status?: string }).status ?? 'open';
     const list = await reviews().find({ status }).sort({ _id: -1 }).limit(200).toArray();
     const data = await Promise.all(
@@ -161,41 +166,41 @@ export function buildApi(db: Db, r2: R2): FastifyInstance {
         imageUrl: r.imageKey ? await r2.presign(r.imageKey as string).catch(() => null) : null,
       })),
     );
-    return { data };
-  });
+    return res.json({ data });
+  }));
 
   // ── POST /v1/reviews/:id/resolve — humans get validated too (§7.3, W8) ───────────
-  app.post('/v1/reviews/:id/resolve', async (req, reply) => {
-    const rid = (req.params as { id: string }).id;
+  router.post('/reviews/:id/resolve', h(async (req, res) => {
+    const rid = req.params.id as string;
     const body = (req.body ?? {}) as { value?: unknown; dismiss?: boolean; resolvedBy?: string };
     const review = await reviews().findOne({ _id: new ObjectId(rid) });
-    if (!review) return reply.status(404).send({ error: 'review not found', id: rid });
-    if (review.status !== 'open') return reply.status(409).send({ error: `review already ${review.status}` });
+    if (!review) return res.status(404).json({ error: 'review not found', id: rid });
+    if (review.status !== 'open') return res.status(409).json({ error: `review already ${review.status}` });
 
     const docId = review.docHash as string;
     const key = review.field as string;
 
     if (body.dismiss) {
       await reviews().updateOne({ _id: review._id }, { $set: { status: 'dismissed', resolvedBy: body.resolvedBy ?? 'api', resolvedAt: new Date() } });
-      await db.collection('documents').updateOne(
+      await documents().updateOne(
         { _id: docId as never },
         { $set: { [`fields.${key}`]: { value: null, status: 'not_expected', resolvedBy: body.resolvedBy ?? 'api' } } },
       );
       if (review.imageKey) await r2.delete(review.imageKey as string).catch(() => {});
       await finalizeDocAfterReview(db, docId);
-      return reply.send({ resolved: false, dismissed: true });
+      return res.json({ resolved: false, dismissed: true });
     }
 
     // Same validation code path — evidence waived for humans, schema + rules NOT waived.
-    const doc = await db.collection('documents').findOne({ _id: docId as never });
+    const doc = await documents().findOne({ _id: docId as never });
     const all: Record<string, unknown> = {};
     for (const [k, f] of Object.entries((doc?.fields ?? {}) as Record<string, { status?: string; value?: unknown }>)) {
       if (f.status === 'validated') all[k] = { value: f.value };
     }
     const v = validateField(key, { value: body.value, evidence: 'human_review', page: (review.pages as number[] | undefined)?.[0] ?? 1 }, '', all, { skipEvidence: true });
-    if (!v.ok) return reply.status(422).send({ error: v.reason });
+    if (!v.ok) return res.status(422).json({ error: v.reason });
 
-    await db.collection('documents').updateOne(
+    await documents().updateOne(
       { _id: docId as never },
       { $set: { [`fields.${key}`]: { value: body.value, status: 'validated', layer: 'human_review', page: (review.pages as number[] | undefined)?.[0] ?? null, evidence: 'human_review', resolvedBy: body.resolvedBy ?? 'api' }, updatedAt: new Date() } },
     );
@@ -206,11 +211,11 @@ export function buildApi(db: Db, r2: R2): FastifyInstance {
     if (review.imageKey) await r2.delete(review.imageKey as string).catch(() => {});
     await finalizeDocAfterReview(db, docId);
     await logEvent(docId, 'review_resolved', { field: key });
-    return reply.send({ resolved: true, field: key, value: body.value });
-  });
+    return res.json({ resolved: true, field: key, value: body.value });
+  }));
 
   // ── GET /v1/stats — the improvement dashboard ─────────────────────────────────
-  app.get('/v1/stats', async () => {
+  router.get('/stats', h(async (_req, res) => {
     const byStatus = await documents().aggregate([{ $group: { _id: '$status', n: { $sum: 1 } } }]).toArray();
     const docs = await documents().find({}, { projection: { fields: 1, cost: 1 } }).toArray();
     const layerWins: Record<string, number> = {};
@@ -229,7 +234,7 @@ export function buildApi(db: Db, r2: R2): FastifyInstance {
       };
     }
     const n = Math.max(1, docs.length);
-    return {
+    return res.json({
       documents: Object.fromEntries(byStatus.map((s) => [s._id, s.n])),
       fields: { validated, needsReview: review, reviewRate: validated + review ? review / (validated + review) : 0 },
       layerWinRates: layerWins,
@@ -238,25 +243,30 @@ export function buildApi(db: Db, r2: R2): FastifyInstance {
         firecrawlPdfCalls: cost.firecrawlPdfCalls / n,
         deepseekTokens: cost.deepseekTokens / n,
       },
-    };
-  });
+    });
+  }));
 
   // ── GET /v1/health ───────────────────────────────────────────────────────────
-  app.get('/v1/health', async () => {
+  router.get('/health', h(async (_req, res) => {
     let mongo = false; let r2ok = false;
     try { await db.command({ ping: 1 }); mongo = true; } catch { /* report below */ }
     try { await r2.list('pdf/'); r2ok = true; } catch { /* report below */ }
     const queueDepth = await documents().countDocuments({ status: 'queued' }).catch(() => -1);
-    return { ok: mongo && r2ok, mongo, r2: r2ok, queueDepth, memoryRssMb: Math.round(process.memoryUsage().rss / 1048576) };
-  });
+    return res.json({ ok: mongo && r2ok, mongo, r2: r2ok, queueDepth, memoryRssMb: Math.round(process.memoryUsage().rss / 1048576) });
+  }));
 
   // ── POST /v1/admin/janitor — trigger sweep; ?dryRun=1 lists deletions (W7) ───────
-  app.post('/v1/admin/janitor', async (req) => {
+  router.post('/admin/janitor', h(async (req, res) => {
     const dryRun = (req.query as { dryRun?: string }).dryRun === '1';
-    return janitor(r2, db, { dryRun });
+    return res.json(await janitor(r2, db, { dryRun }));
+  }));
+
+  // Router-scoped error handler — /v1 errors never leak HTML stacks.
+  router.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
+    res.status(500).json({ error: err.message });
   });
 
-  return app;
+  return router;
 }
 
 /** §7.2 detail payload: full record minus lock fields, plus computed extras. */
@@ -315,9 +325,7 @@ async function finalizeDocAfterReview(db: Db, docId: string): Promise<void> {
   if (open === 0 && !anyReviewFields && doc.status === 'done_with_review') {
     await db.collection('documents').updateOne({ _id: docId as never }, { $set: { status: 'done', updatedAt: new Date() } });
   }
-  await db.collection('documents').updateOne(
-    { _id: docId as never },
-    [{ $set: { progress: { $literal: computeProgress((await db.collection('documents').findOne({ _id: docId as never })) as MongoDoc) } } }] as never,
-  ).catch(() => {});
-  await mergeIpoRecord(db, (await db.collection('documents').findOne({ _id: docId as never })) as MongoDoc);
+  const fresh = (await db.collection('documents').findOne({ _id: docId as never })) as MongoDoc;
+  await db.collection('documents').updateOne({ _id: docId as never }, { $set: { progress: computeProgress(fresh) } });
+  await mergeIpoRecord(db, fresh);
 }

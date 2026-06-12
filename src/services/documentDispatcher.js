@@ -15,9 +15,10 @@
  * @returns {Promise<Array<{docType, url, status?, documentId?, deduped?, error?}>>}
  */
 async function dispatchIpoDocuments(ipo, opts = {}) {
+  // Extraction now runs in THIS process at /v1 — default to our own port.
   const base = (opts.baseUrl
     || process.env.EXTRACTION_API_URL
-    || `http://localhost:${process.env.EXTRACTION_PORT || 8090}`).replace(/\/+$/, '');
+    || `http://localhost:${process.env.PORT || 3001}`).replace(/\/+$/, '');
   const apiKey = opts.apiKey || process.env.SERVICE_API_KEY || '';
   const fetchFn = opts.fetch || fetch;
 

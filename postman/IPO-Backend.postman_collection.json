@@ -5,8 +5,8 @@
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "variable": [
-    { "key": "scraperUrl", "value": "http://localhost:3000" },
-    { "key": "extractionUrl", "value": "http://localhost:8090" },
+    { "key": "scraperUrl", "value": "http://localhost:3001" },
+    { "key": "extractionUrl", "value": "http://localhost:3001" },
     { "key": "apiKey", "value": "change-me" },
     { "key": "slug", "value": "example-ipo" },
     { "key": "documentId", "value": "" },

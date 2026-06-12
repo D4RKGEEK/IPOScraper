@@ -15,10 +15,14 @@ const { runHistorical } = require('../services/historicalService');
 const { createJob, appendLog, completeJob, failJob, getJob, listJobs } = require('../db/jobRepository');
 const { logger, requestLogger } = require('../utils/logger');
 
-function buildApp() {
+function buildApp(opts = {}) {
   const app = express();
   app.use(express.json({ limit: '2mb' }));
   app.use(requestLogger);
+
+  // Document extraction pipeline (PRD v2.1) — Express router supplied by
+  // src/extraction/bootstrap.ts; mounted here so it sits before the 404.
+  if (opts.v1Router) app.use('/v1', opts.v1Router);
 
   // Serve the dashboard SPA
   const publicDir = path.join(__dirname, 'public');

@@ -4,8 +4,8 @@
   "description": "",
   "main": "src/api/server.js",
   "scripts": {
-    "test": "vitest run",
-    "extraction": "tsx src/extraction/main.ts"
+    "start": "tsx src/api/server.js",
+    "test": "vitest run"
   },
   "keywords": [],
   "author": "",
@@ -19,7 +19,6 @@
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
     "fast-xml-parser": "^5.8.0",
-    "fastify": "^5.2.0",
     "js-yaml": "^4.1.0",
     "mongodb": "^7.2.0",
     "mupdf": "^1.26.4",
@@ -30,6 +29,7 @@
     "zod-to-json-schema": "^3.24.0"
   },
   "devDependencies": {
+    "@types/express": "^5.0.0",
     "@types/js-yaml": "^4.0.9",
     "@types/node": "^22.10.0",
     "tsx": "^4.19.0",

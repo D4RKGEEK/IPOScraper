@@ -16,8 +16,7 @@ const Env = z.object({
   R2_SECRET: z.string().min(1),
   FIRECRAWL_API_KEY: z.string().min(1),
   DEEPSEEK_API_KEY: z.string().min(1),
-  SERVICE_API_KEY: z.string().min(1),        // X-API-Key for our own REST API
-  EXTRACTION_PORT: z.coerce.number().int().positive().default(8090),
+  SERVICE_API_KEY: z.string().min(1),        // X-API-Key protecting the /v1 routes
 });
 
 const parsed = Env.safeParse(process.env);
@@ -39,7 +38,6 @@ export const CFG = {
   firecrawl: { apiKey: env.FIRECRAWL_API_KEY, base: 'https://api.firecrawl.dev' },
   deepseek: { apiKey: env.DEEPSEEK_API_KEY, base: 'https://api.deepseek.com' },
   apiKey: env.SERVICE_API_KEY,
-  port: env.EXTRACTION_PORT,
   budget: { wallMsPerDoc: 600_000, maxAttemptsPerField: 4 },
   keepOriginalPdf: false,
 } as const;
