@@ -25,7 +25,7 @@ async function main() {
   // Disabled gracefully when env vars are missing or not running under tsx.
   let v1Router = null;
   try {
-    const { createExtraction } = require('../extraction/bootstrap');
+    const { createExtraction } = await import('../extraction/bootstrap.ts');
     v1Router = (await createExtraction()).router;
     logger.info('extraction pipeline mounted at /v1 (worker running)');
   } catch (e) {

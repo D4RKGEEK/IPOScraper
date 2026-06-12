@@ -32,7 +32,7 @@ export const SECTION_KEYWORDS: Record<string, string[][]> = {
   general_info: [['REGISTRAR']],
 };
 
-export function loadAliases(file = path.join(__dirname, 'aliases.yaml')): Record<string, string[]> {
+export function loadAliases(file = path.join(import.meta.dirname, 'aliases.yaml')): Record<string, string[]> {
   return yaml.load(fs.readFileSync(file, 'utf8')) as Record<string, string[]>;
 }
 

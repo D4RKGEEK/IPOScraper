@@ -38,8 +38,15 @@ export function buildExtractionRouter(db: Db, r2: R2): Router {
   // ── §7.1 POST /v1/documents — submit a PDF by link ───────────────────────────
   router.post('/documents', h(async (req, res) => {
     const body = (req.body ?? {}) as { pdfUrl?: string; ipoSlug?: string; meta?: object; webhookUrl?: string };
+    
+    if (!body.pdfUrl && body.ipoSlug) {
+      const ipoDb = db.client.db(process.env.MONGODB_DB || 'ipo');
+      const ipo = await ipoDb.collection('ipos').findOne({ slug: body.ipoSlug });
+      body.pdfUrl = ipo?.documents?.drhp?.url || ipo?.documents?.rhp?.url || undefined;
+    }
+
     if (!body.pdfUrl || !/^https?:\/\//.test(body.pdfUrl)) {
-      return res.status(400).json({ error: 'pdfUrl (http/https) is required' });
+      return res.status(400).json({ error: 'pdfUrl (http/https) is required, or provide a valid ipoSlug that has documents in the database.' });
     }
     const id = sha256(body.pdfUrl);
     const existing = await documents().findOne({ _id: id as never });
