@@ -147,9 +147,12 @@ export async function locateSections(
     const entries: Array<{ title: string; printed: number }> = [];
     for (let p = 0; p < Math.min(8, pageCount); p++) {
       const text = pageText(doc, p);
+      if (text.toUpperCase().includes('TABLE OF CONTENTS')) {
+        tocRaw = text + '\n' + pageText(doc, p + 1);
+      }
       const matches = [...text.matchAll(/^(.{4,80}?)\.{3,}\s*(\d{1,3})\s*$/gm)];
       if (matches.length >= 5) {
-        tocRaw = text;
+        tocRaw = text; // override with the exact page if we got good matches
         for (const m of matches) entries.push({ title: (m[1] as string).trim(), printed: parseInt(m[2] as string, 10) });
         break;
       }
