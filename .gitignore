@@ -1,0 +1,30 @@
+node_modules
+.env
+data/
+.agent/
+.agents/
+.planning/
+*.tmp
+
+# OS / editor junk
+.DS_Store
+*.log
+.vscode/
+.idea/
+
+# Large downloaded prospectus PDFs (re-downloadable)
+PDFs/
+downloads/
+
+# Generated extraction output
+out/
+
+# Cached downloaded PDFs (keep the small cache_index.json)
+pdf_cache/*.pdf
+
+# Session cookies (regenerated, sensitive)
+nse_cookies_http1.json
+*cookies*.json
+
+# Raw workflow dump (keep rules/ipo_bidding_rules.json)
+rules/_raw_workflow_output.json
