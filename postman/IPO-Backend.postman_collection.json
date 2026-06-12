@@ -1,0 +1,300 @@
+{
+  "info": {
+    "name": "IPO Backend — Scraper + Extraction Pipeline (PRD v2.1)",
+    "description": "Two services:\n1. Scraper API (Express) — IPO data from NSE/Upstox/Groww/Zerodha.\n2. Extraction API (Fastify, /v1, X-API-Key) — PDF document extraction pipeline.\n\nVariables to set: scraperUrl, extractionUrl, apiKey. After submitting a document, copy documentId into the collection variable.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "scraperUrl", "value": "http://localhost:3000" },
+    { "key": "extractionUrl", "value": "http://localhost:8090" },
+    { "key": "apiKey", "value": "change-me" },
+    { "key": "slug", "value": "example-ipo" },
+    { "key": "documentId", "value": "" },
+    { "key": "reviewId", "value": "" },
+    { "key": "jobId", "value": "" }
+  ],
+  "item": [
+    {
+      "name": "Scraper API",
+      "item": [
+        {
+          "name": "Health",
+          "request": { "method": "GET", "url": "{{scraperUrl}}/health" }
+        },
+        {
+          "name": "List IPOs",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{scraperUrl}}/ipos?status=open&sort=latest&page=1&limit=50",
+              "host": ["{{scraperUrl}}"],
+              "path": ["ipos"],
+              "query": [
+                { "key": "status", "value": "open", "description": "open | upcoming | closed", "disabled": true },
+                { "key": "search", "value": "", "disabled": true },
+                { "key": "source", "value": "nse", "disabled": true },
+                { "key": "sort", "value": "latest", "disabled": true },
+                { "key": "page", "value": "1", "disabled": true },
+                { "key": "limit", "value": "50", "disabled": true }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get IPO by slug",
+          "request": { "method": "GET", "url": "{{scraperUrl}}/ipos/{{slug}}" }
+        },
+        {
+          "name": "Get IPO raw per-source data",
+          "request": { "method": "GET", "url": "{{scraperUrl}}/ipos/{{slug}}?raw=true" }
+        },
+        {
+          "name": "Get IPO history (GMP/status series)",
+          "request": { "method": "GET", "url": "{{scraperUrl}}/ipos/{{slug}}/history" }
+        },
+        {
+          "name": "Run scrape (async job)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{scraperUrl}}/ipos/scrape",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"sources\": [\"nse\", \"upstox\", \"groww\", \"zerodha\"],\n  \"dryRun\": false,\n  \"force\": false,\n  \"wait\": false\n}"
+            }
+          }
+        },
+        {
+          "name": "Run GMP fetch",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{scraperUrl}}/ipos/gmp",
+            "body": { "mode": "raw", "raw": "{\n  \"status\": \"all\"\n}" }
+          }
+        },
+        {
+          "name": "Run historical (listed IPOs)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{scraperUrl}}/ipos/historical",
+            "body": { "mode": "raw", "raw": "{\n  \"limit\": 10\n}" }
+          }
+        },
+        {
+          "name": "Dispatch IPO documents to extraction",
+          "request": {
+            "method": "POST",
+            "url": "{{scraperUrl}}/ipos/{{slug}}/extract",
+            "description": "Sends this IPO's drhp/rhp URLs to the extraction service's POST /v1/documents. Requires the extraction service to be running (npm run extraction)."
+          }
+        },
+        {
+          "name": "Sources health",
+          "request": { "method": "GET", "url": "{{scraperUrl}}/sources" }
+        },
+        {
+          "name": "List jobs",
+          "request": { "method": "GET", "url": "{{scraperUrl}}/jobs" }
+        },
+        {
+          "name": "Get job",
+          "request": { "method": "GET", "url": "{{scraperUrl}}/jobs/{{jobId}}" }
+        },
+        {
+          "name": "Delete IPO",
+          "request": { "method": "DELETE", "url": "{{scraperUrl}}/ipos/{{slug}}" }
+        }
+      ]
+    },
+    {
+      "name": "Extraction API (/v1)",
+      "item": [
+        {
+          "name": "Submit document (PRD §7.1)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const b = pm.response.json();",
+                  "if (b.documentId) pm.collectionVariables.set('documentId', b.documentId);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "X-API-Key", "value": "{{apiKey}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": "{{extractionUrl}}/v1/documents",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"pdfUrl\": \"https://www.sebi.gov.in/.../xyz_rhp.pdf\",\n  \"ipoSlug\": \"{{slug}}\",\n  \"meta\": { \"scrapedBy\": \"postman\" }\n}"
+            },
+            "description": "202 → { documentId, status, deduped, statusUrl }. documentId is auto-saved to the collection variable."
+          }
+        },
+        {
+          "name": "Poll document progress (PRD §7.2 — main poll)",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "X-API-Key", "value": "{{apiKey}}" }],
+            "url": "{{extractionUrl}}/v1/documents/{{documentId}}",
+            "description": "Stage, percent, stageDetail, etaSeconds, per-field ladder status, timeline, cost."
+          }
+        },
+        {
+          "name": "List documents",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "X-API-Key", "value": "{{apiKey}}" }],
+            "url": {
+              "raw": "{{extractionUrl}}/v1/documents?status=queued&page=1",
+              "host": ["{{extractionUrl}}"],
+              "path": ["v1", "documents"],
+              "query": [
+                { "key": "status", "value": "queued", "disabled": true },
+                { "key": "ipoSlug", "value": "{{slug}}", "disabled": true },
+                { "key": "page", "value": "1", "disabled": true }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get document result (terminal only)",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "X-API-Key", "value": "{{apiKey}}" }],
+            "url": "{{extractionUrl}}/v1/documents/{{documentId}}/result",
+            "description": "404-with-status until the document reaches done / done_with_review / failed_poison."
+          }
+        },
+        {
+          "name": "Get document events (audit trail)",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "X-API-Key", "value": "{{apiKey}}" }],
+            "url": "{{extractionUrl}}/v1/documents/{{documentId}}/events"
+          }
+        },
+        {
+          "name": "Retry document",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "X-API-Key", "value": "{{apiKey}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": "{{extractionUrl}}/v1/documents/{{documentId}}/retry",
+            "body": { "mode": "raw", "raw": "{\n  \"force\": false\n}" },
+            "description": "force:false → only non-validated fields re-enter the ladder (location map stays cached). force:true → wipe and redo everything."
+          }
+        },
+        {
+          "name": "Get merged IPO record (what your product reads)",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "X-API-Key", "value": "{{apiKey}}" }],
+            "url": "{{extractionUrl}}/v1/ipos/{{slug}}"
+          }
+        },
+        {
+          "name": "List merged IPOs",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "X-API-Key", "value": "{{apiKey}}" }],
+            "url": {
+              "raw": "{{extractionUrl}}/v1/ipos",
+              "host": ["{{extractionUrl}}"],
+              "path": ["v1", "ipos"],
+              "query": [{ "key": "completeness.needsReview", "value": "0", "disabled": true }]
+            }
+          }
+        },
+        {
+          "name": "List open reviews (presigned PNGs, 15-min)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const b = pm.response.json();",
+                  "if (b.data && b.data[0]) pm.collectionVariables.set('reviewId', b.data[0]._id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "X-API-Key", "value": "{{apiKey}}" }],
+            "url": "{{extractionUrl}}/v1/reviews?status=open",
+            "description": "First open review's _id is auto-saved to the reviewId variable."
+          }
+        },
+        {
+          "name": "Resolve review",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "X-API-Key", "value": "{{apiKey}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": "{{extractionUrl}}/v1/reviews/{{reviewId}}/resolve",
+            "body": { "mode": "raw", "raw": "{\n  \"value\": 64.2,\n  \"resolvedBy\": \"postman\"\n}" },
+            "description": "Runs the SAME zod schema + business rules — 422 with the exact rule error on bad input (W8). Use {\"dismiss\": true} to mark not-extractable."
+          }
+        },
+        {
+          "name": "Dismiss review",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "X-API-Key", "value": "{{apiKey}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": "{{extractionUrl}}/v1/reviews/{{reviewId}}/resolve",
+            "body": { "mode": "raw", "raw": "{\n  \"dismiss\": true\n}" }
+          }
+        },
+        {
+          "name": "Stats (layer win rates, review rate, cost/doc)",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "X-API-Key", "value": "{{apiKey}}" }],
+            "url": "{{extractionUrl}}/v1/stats"
+          }
+        },
+        {
+          "name": "Health (mongo, r2, queue depth, RSS)",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "X-API-Key", "value": "{{apiKey}}" }],
+            "url": "{{extractionUrl}}/v1/health"
+          }
+        },
+        {
+          "name": "Janitor — dry run (W7: inspect before deleting)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "X-API-Key", "value": "{{apiKey}}" }],
+            "url": "{{extractionUrl}}/v1/admin/janitor?dryRun=1"
+          }
+        },
+        {
+          "name": "Janitor — real sweep",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "X-API-Key", "value": "{{apiKey}}" }],
+            "url": "{{extractionUrl}}/v1/admin/janitor"
+          }
+        }
+      ]
+    }
+  ]
+}
