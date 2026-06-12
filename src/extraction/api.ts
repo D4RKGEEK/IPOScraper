@@ -37,7 +37,8 @@ export function buildExtractionRouter(db: Db, r2: R2): Router {
 
   // ── §7.1 POST /v1/documents — submit a PDF by link ───────────────────────────
   router.post('/documents', h(async (req, res) => {
-    const body = (req.body ?? {}) as { pdfUrl?: string; ipoSlug?: string; meta?: object; webhookUrl?: string };
+    const body = (req.body ?? {}) as { pdfUrl?: string; ipoSlug?: string; meta?: object; webhookUrl?: string; force?: boolean };
+    const force = !!body.force;
     
     if (!body.pdfUrl && body.ipoSlug) {
       const ipoDb = db.client.db(process.env.MONGODB_DB || 'ipo');
@@ -51,8 +52,17 @@ export function buildExtractionRouter(db: Db, r2: R2): Router {
     const id = sha256(body.pdfUrl);
     const existing = await documents().findOne({ _id: id as never });
     if (existing) {
-      // Dedupe by sourceUrl — re-submit forces nothing (§7.1, fallback #29).
-      return res.status(202).json({ documentId: id, status: existing.status, deduped: true, statusUrl: `/v1/documents/${id}` });
+      if (force) {
+        await documents().updateOne(
+          { _id: id as never },
+          { $set: { status: 'queued', fields: {}, stages: {}, error: null, progress: { percent: 0, stage: 'queued' }, lockedBy: null, lockedAt: null, updatedAt: new Date() } },
+        );
+        await logEvent(id, 'retry', { force });
+        return res.status(202).json({ documentId: id, status: 'queued', force, statusUrl: `/v1/documents/${id}` });
+      } else {
+        // Dedupe by sourceUrl — re-submit forces nothing (§7.1, fallback #29).
+        return res.status(202).json({ documentId: id, status: existing.status, deduped: true, statusUrl: `/v1/documents/${id}` });
+      }
     }
     try {
       await documents().insertOne({
