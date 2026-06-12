@@ -48,8 +48,6 @@ export function expectedFields(docType: DocType | 'UNKNOWN'): string[] {
 /** Recompute the §7.2 progress block from a document. Pure — unit-testable. */
 export function computeProgress(doc: MongoDoc): Record<string, unknown> {
   const fields = (doc.fields ?? {}) as Record<string, { status?: string }>;
-  const docType = (doc.docType ?? 'UNKNOWN') as DocType | 'UNKNOWN';
-  const expected = expectedFields(docType);
   const total = FIELDS.length;
   let validated = 0; let review = 0; let notExpected = 0;
   for (const key of Object.keys(fields)) {
@@ -58,9 +56,8 @@ export function computeProgress(doc: MongoDoc): Record<string, unknown> {
     else if (s === 'needs_review') review++;
     else if (s === 'not_expected') notExpected++;
   }
-  // Fields outside this docType's expectations count as not_expected up front.
-  notExpected += Math.max(0, total - expected.length - Object.keys(fields).filter((k) => fields[k]?.status === 'not_expected' && !expected.includes(k)).length * 0);
-  notExpected = Math.min(notExpected, total - validated - review);
+  // The classifier persists not_expected fields up front (S2), so counting the
+  // fields map alone is sufficient — no double counting.
   const settled = validated + review + notExpected;
   const pending = Math.max(0, total - settled);
 

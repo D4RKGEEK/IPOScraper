@@ -164,7 +164,15 @@ function buildApp() {
     await runTracked(res, { type: 'historical', params: { status, since, limit } }, (log) => runHistorical({ status, since, limit, log }));
   }));
 
-
+  // POST /ipos/:slug/extract — send this IPO's document links (drhp/rhp) to the
+  // extraction pipeline service (PRD v2.1; runs separately via `npm run extraction`).
+  app.post('/ipos/:slug/extract', asyncH(async (req, res) => {
+    const { dispatchIpoDocuments } = require('../services/documentDispatcher');
+    const ipo = await findBySlug(req.params.slug);
+    if (!ipo) return res.status(404).json({ error: 'IPO not found', slug: req.params.slug });
+    const dispatched = await dispatchIpoDocuments(ipo);
+    res.json({ slug: ipo.slug, dispatched });
+  }));
 
   // DELETE /ipos/:slug — remove IPO + its documents
   app.delete('/ipos/:slug', asyncH(async (req, res) => {

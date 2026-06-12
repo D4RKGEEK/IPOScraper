@@ -1,38 +1,21 @@
 /**
- * db/eventsRepository.ts — Append-only audit trail for the `events` collection.
- *
- * Index:
- *   docHash    1
- *   at         -1
- *   type       1
+ * eventsRepository.ts — typed access to the extraction pipeline's append-only
+ * audit log (PRD §6.4; capped collection, created by src/extraction/db.ts).
  */
+import { col } from '../extraction/db';
 
-// @ts-ignore CommonJS module
-import { getDb } from './mongo.js';
-import type { Collection } from 'mongodb';
-
-export interface EventDoc {
-  _id?: string;
-  docHash: string;
-  at: string;         // ISO timestamp
-  type: 'info' | 'warning' | 'error' | 'stage' | 'retry' | 'review';
-  message: string;
-  data?: Record<string, unknown>;
+export interface EventRecord {
+  at: Date;
+  docHash: string | null;
+  kind: string;
+  detail: unknown;
 }
 
-export async function insertEvent(event: EventDoc): Promise<void> {
-  const col = getDb().collection('events') as Collection<EventDoc>;
-  await col.insertOne(event);
+export async function appendEvent(docHash: string | null, kind: string, detail: unknown): Promise<void> {
+  await col.events().insertOne({ at: new Date(), docHash, kind, detail });
 }
 
-export async function findByDocHash(
-  docHash: string,
-  limit = 200,
-): Promise<EventDoc[]> {
-  const col = getDb().collection('events') as Collection<EventDoc>;
-  return (await col.find({ docHash }).sort({ at: -1 }).limit(limit).toArray()) as unknown as EventDoc[];
-}
-
-export async function eventsCollection(): Promise<Collection<EventDoc>> {
-  return getDb().collection('events');
+export async function listEvents(docHash: string, limit = 500): Promise<EventRecord[]> {
+  const rows = await col.events().find({ docHash }).sort({ at: -1 }).limit(limit).toArray();
+  return rows as unknown as EventRecord[];
 }
