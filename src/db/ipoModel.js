@@ -34,7 +34,7 @@ function normUrl(u) {
   return String(u || '').trim().replace(/\/+$/, '');
 }
 
-/** Build the { drhp, rhp, final } documents map with provenance. */
+/** Build the { drhp, rhp } documents map with provenance. */
 function documentsMap(record) {
   const map = {};
   const push = (docType, url, source) => {
@@ -148,4 +148,68 @@ function toIpoDoc(record, opts = {}) {
   };
 }
 
-module.exports = { toIpoDoc, issueType, subscription, documentsMap, sourcesMeta };
+// ── Extraction supersession ──────────────────────────────────────────────────
+// An IPO can accumulate several extraction rows (one per docType×pipeline). The
+// authoritative one is the highest-priority document that extracted (rhp >
+// drhp). When a better document arrives (e.g. the RHP after the DRHP),
+// lower-priority rows are marked `superseded` and a single summary is
+// denormalized onto the IPO so consumers have one obvious "live data" pointer.
+
+const DOC_PRIORITY = { rhp: 2, drhp: 1 };
+const docPriority = (t) => DOC_PRIORITY[t] || 0;
+
+/**
+ * Pure reconciliation of an IPO's extraction rows.
+ *
+ * @param {Array<{docType, pipeline, status, validation, extractedAt}>} rows
+ * @returns {{
+ *   currentDocType: string|null,
+ *   current: {docType, pipeline, status, score, extractedAt}|null,
+ *   rows: Array<{docType, pipeline, superseded: boolean}>,
+ *   supersededDocTypes: string[],
+ * }}
+ */
+function reconcileExtractionState(rows = []) {
+  const usable = rows.filter((r) => r && r.status !== 'failed');
+  const maxPriority = usable.reduce((m, r) => Math.max(m, docPriority(r.docType)), -1);
+
+  const flagged = rows.map((r) => ({
+    docType: r.docType,
+    pipeline: r.pipeline,
+    // Only non-failed rows can be "superseded"; failed rows just stay failed.
+    superseded: r.status !== 'failed' && docPriority(r.docType) < maxPriority,
+  }));
+
+  // docTypes whose rows are all eclipsed by a higher-priority document.
+  const supersededDocTypes = [...new Set(
+    rows.filter((r) => docPriority(r.docType) < maxPriority).map((r) => r.docType),
+  )];
+
+  // Pick the best row of the winning docType for the denormalized summary.
+  const statusRank = { completed: 2, review: 1 };
+  const score = (r) => (r.validation && typeof r.validation.score === 'number' ? r.validation.score : -1);
+  const winners = usable.filter((r) => docPriority(r.docType) === maxPriority);
+  winners.sort((a, b) =>
+    (statusRank[b.status] || 0) - (statusRank[a.status] || 0) ||
+    score(b) - score(a) ||
+    String(b.extractedAt || '').localeCompare(String(a.extractedAt || '')));
+  const best = winners[0] || null;
+
+  return {
+    currentDocType: best ? best.docType : null,
+    current: best ? {
+      docType: best.docType,
+      pipeline: best.pipeline,
+      status: best.status,
+      score: best.validation && typeof best.validation.score === 'number' ? best.validation.score : null,
+      extractedAt: best.extractedAt || null,
+    } : null,
+    rows: flagged,
+    supersededDocTypes,
+  };
+}
+
+module.exports = {
+  toIpoDoc, issueType, subscription, documentsMap, sourcesMeta,
+  reconcileExtractionState, docPriority, DOC_PRIORITY,
+};

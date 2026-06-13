@@ -132,11 +132,15 @@ async function suggestSchema(ipo, docType, userPrompt, opts = {}, logMsg = () =>
   let text = pages.map((p) => `=== PAGE ${p.page} ===\n${p.text}`).join('\n\n');
   if (text.length > MAX_LLM_TEXT_CHARS) text = text.slice(0, MAX_LLM_TEXT_CHARS);
 
-  const existingKeys = Object.keys(getFields());
+  const existing = getFields();
+  const existingList = Object.entries(existing)
+    .map(([k, def]) => `- ${k} (${def.type}): ${def.description || ''}`)
+    .join('\n');
 
   const prompt = `${SUGGEST_SYSTEM}
 
-EXISTING FIELD KEYS (do not duplicate): ${existingKeys.join(', ')}
+FIELDS WE ALREADY EXTRACT (do not duplicate; if the user's request is already covered by one or more of these, report them under "alreadyExtracted"):
+${existingList}
 
 USER REQUEST: ${userPrompt}
 
@@ -148,7 +152,10 @@ Respond with STRICT JSON only, no markdown:
   "found": true | false,                         // is the requested data present in the text?
   "explanation": "1-3 sentences on what you found and where",
   "evidence": ["short verbatim snippet 1", "snippet 2"],   // quotes that justify the fields
-  "proposedFields": {                            // {} if nothing to add
+  "alreadyExtracted": [                           // [] if nothing overlaps
+     { "key": "existing_field_key", "why": "how this existing field already captures the request" }
+  ],
+  "proposedFields": {                            // {} if nothing NEW to add (omit anything already covered above)
      "field_key": { "type": "...", "format": "...", "description": "...", "fields": { ... }, "mergeKey": "...", "mergeMatch": "..." }
   }
 }`;
@@ -164,6 +171,9 @@ Respond with STRICT JSON only, no markdown:
     found: !!result.found,
     explanation: result.explanation || '',
     evidence: Array.isArray(result.evidence) ? result.evidence : [],
+    alreadyExtracted: Array.isArray(result.alreadyExtracted)
+      ? result.alreadyExtracted.filter((e) => e && existing[e.key])
+      : [],
     proposedFields: (result.proposedFields && typeof result.proposedFields === 'object') ? result.proposedFields : {},
   };
 }

@@ -38,6 +38,36 @@ function convertSectionToHtml(outputDir, section, logMsg) {
 }
 
 /**
+ * Build a self-contained shell snippet that reproduces this exact Firecrawl
+ * request — same HTML payload and same options — for copy-paste debugging from
+ * the dashboard. The HTML is inlined via a heredoc (temp files are cleaned up
+ * after each run, so a file reference would be dead on arrival). The API key is
+ * read from $FIRECRAWL_API_KEY rather than baked in, so the secret is never
+ * persisted into job logs.
+ *
+ * @param {string} section      Section name (used for the temp file name)
+ * @param {string} htmlContent  Exact HTML body that was uploaded
+ * @param {string} optionsJson  Exact JSON.stringify(options) that was sent
+ * @param {string} url          Firecrawl endpoint
+ * @returns {string} A ready-to-run bash snippet
+ */
+function buildReproCurl(section, htmlContent, optionsJson, url) {
+  const tmp = `/tmp/fc-repro-${section}.html`;
+  // Escape single quotes for safe embedding inside a single-quoted -F arg.
+  const optsEsc = optionsJson.replace(/'/g, `'\\''`);
+  return [
+    `# Reproduce the Firecrawl request for ${section}. First: export FIRECRAWL_API_KEY=<key>`,
+    `cat > ${tmp} <<'FC_HTML_EOF'`,
+    htmlContent,
+    `FC_HTML_EOF`,
+    `curl -sS -i -X POST '${url}' \\`,
+    `  -H "Authorization: Bearer $FIRECRAWL_API_KEY" \\`,
+    `  -F 'file=@${tmp};type=text/html' \\`,
+    `  -F 'options=${optsEsc}'`,
+  ].join('\n');
+}
+
+/**
  * Send an HTML file to Firecrawl /v2/parse and get structured JSON.
  *
  * @param {string} htmlPath   Path to the HTML file
@@ -49,7 +79,7 @@ function convertSectionToHtml(outputDir, section, logMsg) {
 async function firecrawlParse(htmlPath, section, ipoSlug, logMsg) {
   // Check cache first
   const cacheKey = generateCacheKey('firecrawl', `firecrawl_v2_${section}_${ipoSlug}`);
-  const cached = getCachedResponse(cacheKey);
+  const cached = await getCachedResponse(cacheKey);
   if (cached) {
     log.info({ section, ipoSlug }, 'firecrawl cache hit (loaded from disk cache)');
     if (logMsg) logMsg(`Firecrawl cache hit for section ${section} (loaded from disk cache)`);
@@ -86,8 +116,12 @@ async function firecrawlParse(htmlPath, section, ipoSlug, logMsg) {
 
   if (!res.ok) {
     const body = await res.text();
-    log.error({ section, status: res.status, error: body.slice(0, 500) }, 'Firecrawl API call failed');
-    if (logMsg) logMsg(`Firecrawl API call failed for section ${section}: status ${res.status}`);
+    const errorBody = body.slice(0, 500);
+    log.error({ section, status: res.status, error: errorBody }, 'Firecrawl API call failed');
+    if (logMsg) {
+      const curl = buildReproCurl(section, htmlContent, JSON.stringify(options), env.FIRECRAWL_API_URL);
+      logMsg(`Firecrawl API call failed for section ${section}: status ${res.status}`, { curl, errorBody });
+    }
     return {};
   }
 
@@ -104,7 +138,7 @@ async function firecrawlParse(htmlPath, section, ipoSlug, logMsg) {
   }
 
   // Cache the result
-  setCachedResponse(cacheKey, extracted);
+  await setCachedResponse(cacheKey, extracted);
 
   // Save per-section result
   const savePath = path.join(path.dirname(htmlPath), `summary_${section}.json`);

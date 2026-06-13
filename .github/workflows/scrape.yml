@@ -1,0 +1,63 @@
+name: scheduled-scrape
+
+# Triggers the deployed app's scrape + GMP refresh on a schedule.
+# The actual work runs ON your server (the API enqueues it) — GitHub only
+# fires the HTTP request, so this works even with a local MongoDB.
+#
+# Required repo secrets (Settings → Secrets and variables → Actions):
+#   APP_URL            e.g. https://your-app.up.railway.app   (no trailing slash)
+#   DASHBOARD_USER     optional — only if auth is enabled on the box
+#   DASHBOARD_PASSWORD optional — only if auth is enabled on the box
+
+on:
+  schedule:
+    # Twice daily, 02:00 & 13:00 UTC (07:30 & 18:30 IST). Adjust as needed.
+    - cron: '0 2 * * *'
+    - cron: '0 13 * * *'
+  workflow_dispatch: {}   # allow manual "Run workflow" from the Actions tab
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger scrape + GMP refresh
+        env:
+          APP_URL: ${{ secrets.APP_URL }}
+          DASHBOARD_USER: ${{ secrets.DASHBOARD_USER }}
+          DASHBOARD_PASSWORD: ${{ secrets.DASHBOARD_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [ -z "${APP_URL:-}" ]; then
+            echo "::error::APP_URL secret is not set"; exit 1
+          fi
+
+          # 1) Get an auth token if a password is configured; otherwise auth is
+          #    disabled on the box and the endpoints are open.
+          TOKEN=""
+          if [ -n "${DASHBOARD_PASSWORD:-}" ]; then
+            echo "Logging in as ${DASHBOARD_USER:-admin}..."
+            LOGIN=$(curl -fsS --max-time 30 -X POST "$APP_URL/auth/login" \
+              -H 'Content-Type: application/json' \
+              -d "{\"username\":\"${DASHBOARD_USER:-admin}\",\"password\":\"${DASHBOARD_PASSWORD}\"}")
+            TOKEN=$(printf '%s' "$LOGIN" | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')
+            if [ -z "$TOKEN" ]; then echo "::error::login failed"; exit 1; fi
+          fi
+          AUTH=()
+          if [ -n "$TOKEN" ]; then AUTH=(-H "Authorization: Bearer $TOKEN"); fi
+
+          # 2) Scrape (wait:true so we get the summary back and can fail on error).
+          echo "Running scrape..."
+          SCRAPE=$(curl -fsS --max-time 600 -X POST "$APP_URL/ipos/scrape" \
+            "${AUTH[@]}" -H 'Content-Type: application/json' -d '{"wait":true}')
+          echo "$SCRAPE"
+
+          # 3) Refresh grey-market premium for open/upcoming IPOs.
+          echo "Refreshing GMP..."
+          curl -fsS --max-time 300 -X POST "$APP_URL/ipos/gmp" \
+            "${AUTH[@]}" -H 'Content-Type: application/json' -d '{"wait":true}' || true
+
+          # 4) Surface any per-source scrape errors as a failed run.
+          if printf '%s' "$SCRAPE" | grep -q '"error"'; then
+            echo "::error::scrape reported errors — see output above"; exit 1
+          fi
+          echo "Done."

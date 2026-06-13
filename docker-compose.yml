@@ -1,0 +1,28 @@
+# Railway-equivalent runtime for a plain DigitalOcean droplet.
+#   build:    same Dockerfile Railway uses (Node 22 + Python venv)
+#   restart:  unless-stopped  → auto-restart on crash or reboot (Railway "restart on failure")
+#   healthcheck: hits /health  → Docker marks the container unhealthy & restarts it
+# Secrets come from a .env file you create ONCE on the server (it is gitignored,
+# so `git push` never overwrites it).
+services:
+  api:
+    build: .
+    image: nse-api
+    container_name: nse-api
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      NODE_ENV: production
+      PORT: 3001
+    ports:
+      # host:container — published on 1234 (port 80 was already in use on the box).
+      # Reachable at http://geekvb.xyz:1234 since DNS points at this server.
+      # Swap for "3001:3001" if you put Caddy/nginx in front for HTTPS later.
+      - "1234:3001"
+    healthcheck:
+      # Node 22 has global fetch, so no curl/wget dependency needed.
+      test: ["CMD", "node", "-e", "fetch('http://localhost:3001/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s

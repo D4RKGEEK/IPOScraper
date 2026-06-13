@@ -7,18 +7,22 @@
 
 const path = require('path');
 const express = require('express');
-const { query, findBySlug, deleteBySlug } = require('../db/ipoRepository');
+const { query, findBySlug, deleteBySlug, reconcileExtractions } = require('../db/ipoRepository');
 const { collections } = require('../db/mongo');
 const { runScrape, ALL_SOURCES } = require('../services/scrapeService');
 const { runGmp } = require('../services/gmpService');
 const { runHistorical } = require('../services/historicalService');
-const { runExtraction, runBulkExtraction } = require('../extraction');
+const { runExtraction, runBulkExtraction, testSchemaOnIpo } = require('../extraction');
 const schemaStore = require('../extraction/llm/schema');
 const sectionConfig = require('../extraction/config');
+const validationStore = require('../extraction/validate');
+const { aiEditSchema, aiEditValidation } = require('../extraction/ai-edit');
+const { compareResults, runEval } = require('../extraction/eval');
 const configRepo = require('../db/configRepository');
 const tools = require('../extraction/tools');
 const { createJob, appendLog, completeJob, failJob, getJob, listJobs } = require('../db/jobRepository');
 const { authEnabled, loginHandler, authGuard, DASHBOARD_USER } = require('./auth');
+const { collectSystemMetrics } = require('./metrics');
 const { logger, requestLogger } = require('../utils/logger');
 
 function buildApp(opts = {}) {
@@ -60,6 +64,19 @@ function buildApp(opts = {}) {
   });
 
   /**
+   * Heavy jobs (extraction, PDF tools — Python + LLM) run one-at-a-time so two
+   * can't spike CPU/RAM together and OOM a small box. Light jobs (scrape, gmp)
+   * are network-bound and run freely. No external queue: a single in-process
+   * promise chain gives us concurrency=1 for the heavy lane.
+   */
+  let heavyLane = Promise.resolve();
+  const runOnHeavyLane = (fn) => {
+    const next = heavyLane.then(fn, fn); // run regardless of prior outcome
+    heavyLane = next.catch(() => {});    // a failure must not break the chain
+    return next;
+  };
+
+  /**
    * Run a POST operation as a tracked job. fn(log) does the work and returns the
    * result. Long ops run async by default (return jobId, poll /jobs/:id); pass
    * { wait:true } in the body to run synchronously. Short ops omit longOp.
@@ -68,8 +85,8 @@ function buildApp(opts = {}) {
     const jobId = await createJob(type, params);
     // Serialize log writes so they persist in call order (services call log() without await).
     let logChain = Promise.resolve();
-    const log = (msg) => { logChain = logChain.then(() => appendLog(jobId, msg)); return logChain; };
-    const exec = async () => {
+    const log = (msg, extra) => { logChain = logChain.then(() => appendLog(jobId, msg, extra)); return logChain; };
+    const work = async () => {
       const t0 = Date.now();
       try {
         const result = await fn(log);
@@ -82,6 +99,8 @@ function buildApp(opts = {}) {
         throw e;
       }
     };
+    // Heavy jobs queue on the single-slot lane; light jobs run immediately.
+    const exec = longOp ? () => runOnHeavyLane(work) : work;
     if (longOp && !wait) {
       exec().catch(() => {}); // tracked via the job; errors recorded there
       return res.status(202).json({ jobId, status: 'running', poll: `/jobs/${jobId}` });
@@ -127,6 +146,15 @@ function buildApp(opts = {}) {
     res.status(400).json({ error: e.message });
   });
 
+  // Wrapper for AI-edit endpoints. A 422 means the model produced structurally
+  // invalid config (we never apply it) — return the raw output so the UI can
+  // show what came back and let the user refine the instruction.
+  const aiH = (fn) => (req, res) => fn(req, res).catch((e) => {
+    const status = e.status === 422 ? 422 : 400;
+    logger.warn({ err: e.message, path: req.path }, 'ai edit failed');
+    res.status(status).json({ error: e.message, ...(e.raw ? { raw: e.raw } : {}) });
+  });
+
   // PUT /schema — replace the whole field registry. Body: { fields }.
   app.put('/schema', cfgH(async (req, res) => {
     const fields = req.body?.fields ?? req.body;
@@ -157,6 +185,32 @@ function buildApp(opts = {}) {
     res.json({ fields: await configRepo.resetSchema() });
   }));
 
+  // POST /schema/ai — edit the schema from a freeform instruction. The LLM's
+  // output is HARD-VALIDATED before anything is returned/applied. Preview by
+  // default; pass { apply: true } to persist (a backup is taken automatically).
+  // Body: { instruction, apply? }.
+  app.post('/schema/ai', aiH(async (req, res) => {
+    const { instruction, apply = false } = req.body || {};
+    const out = await aiEditSchema(instruction);
+    if (apply) out.applied = await configRepo.saveSchema(out.proposed, 'ai');
+    res.json({ ...out, persisted: !!apply });
+  }));
+
+  // POST /schema/test — run a CANDIDATE (edited, unsaved) schema against a real
+  // IPO and return the result + validation. Persists nothing. Heavy (one LLM
+  // call) so it runs on the tracked heavy lane. Body: { slug, fields, docType?, pipeline?, wait? }.
+  app.post('/schema/test', asyncH(async (req, res) => {
+    const { slug, fields, docType = 'auto', pipeline = 'gemini', wait = false } = req.body || {};
+    if (!slug) return res.status(400).json({ error: 'slug is required' });
+    try { schemaStore.validateFields(fields); } // fail fast on a bad schema (before spawning a job)
+    catch (e) { return res.status(400).json({ error: e.message }); }
+    const ipo = await findBySlug(slug);
+    if (!ipo) return res.status(404).json({ error: 'IPO not found', slug });
+    await runTracked(res,
+      { type: 'schema-test', params: { slug, docType, pipeline }, longOp: true, wait },
+      (log) => testSchemaOnIpo(ipo, { fields, docType, pipeline, log }));
+  }));
+
   // GET /config/sections — section alias dictionary + which sections are targeted.
   app.get('/config/sections', (_req, res) => {
     res.json({
@@ -180,30 +234,99 @@ function buildApp(opts = {}) {
     res.json(await configRepo.resetSections());
   }));
 
+  // ── Validation rules (dashboard-editable, like the schema) ─────────────────
+
+  // GET /validation — current ruleset + threshold + defaults + type metadata.
+  app.get('/validation', (_req, res) => {
+    res.json({
+      rules: validationStore.getRules(),
+      threshold: validationStore.getThreshold(),
+      ruleTypes: validationStore.RULE_TYPES,
+      defaults: { rules: validationStore.getDefaultRules(), threshold: validationStore.DEFAULT_THRESHOLD },
+    });
+  });
+
+  // PUT /validation — replace the whole ruleset. Body: { rules?, threshold? }.
+  app.put('/validation', cfgH(async (req, res) => {
+    const { rules, threshold } = req.body || {};
+    res.json(await configRepo.saveValidation({ rules, threshold }));
+  }));
+
+  // POST /validation/rule — add or update one rule. Body: { rule }.
+  app.post('/validation/rule', cfgH(async (req, res) => {
+    const rule = req.body?.rule ?? req.body;
+    if (!rule || !rule.id) throw new Error('body requires { rule } with an id');
+    const rules = validationStore.getRules().filter((r) => r.id !== rule.id).concat([rule]);
+    res.json(await configRepo.saveValidation({ rules }));
+  }));
+
+  // DELETE /validation/rule/:id — remove one rule.
+  app.delete('/validation/rule/:id', cfgH(async (req, res) => {
+    const rules = validationStore.getRules();
+    if (!rules.some((r) => r.id === req.params.id)) return res.status(404).json({ error: `No rule "${req.params.id}"` });
+    res.json(await configRepo.saveValidation({ rules: rules.filter((r) => r.id !== req.params.id) }));
+  }));
+
+  // POST /validation/reset — restore the built-in default ruleset.
+  app.post('/validation/reset', cfgH(async (_req, res) => {
+    res.json(await configRepo.resetValidation());
+  }));
+
+  // POST /validation/ai — edit the validation rules from a freeform instruction.
+  // LLM output is HARD-VALIDATED before return/apply. Preview by default; pass
+  // { apply: true } to persist (auto-backup). Body: { instruction, apply? }.
+  app.post('/validation/ai', aiH(async (req, res) => {
+    const { instruction, apply = false } = req.body || {};
+    const out = await aiEditValidation(instruction);
+    if (apply) out.applied = await configRepo.saveValidation({ rules: out.proposed, threshold: out.threshold }, 'ai');
+    res.json({ ...out, persisted: !!apply });
+  }));
+
+  // GET /config/backups?key=schema|sections|validation — recent reversible snapshots.
+  app.get('/config/backups', asyncH(async (req, res) => {
+    res.json({ backups: await configRepo.listBackups(req.query.key) });
+  }));
+
+  // POST /config/backups/:id/restore — roll a config back to a snapshot.
+  app.post('/config/backups/:id/restore', cfgH(async (req, res) => {
+    res.json({ restored: req.params.id, config: await configRepo.restoreBackup(req.params.id) });
+  }));
+
   // API 1: GET /ipos — meta/index
   app.get('/ipos', asyncH(async (req, res) => {
     const { data, pagination } = await query(req.query);
     res.json({ data: data.map(toCard), pagination });
   }));
 
-  // GET /sources — available sources + health
+  // GET /sources — available sources + health.
+  // A source is "down" if it has no IPOs at all, "stale" if its freshest record
+  // hasn't been refreshed within STALE_AFTER_HOURS (a scrape ran but this source
+  // returned nothing / silently broke), else "healthy".
+  const STALE_AFTER_HOURS = 36; // scrape is expected at least daily via cron
   app.get('/sources', asyncH(async (_req, res) => {
     const ipos = collections.ipos();
     const known = ['nse', 'bse', 'upstox', 'groww', 'zerodha', 'investorgain'];
+    const now = Date.now();
     const out = [];
     for (const s of known) {
       const count = await ipos.countDocuments({ [`sources.${s}`]: { $exists: true } });
       const latest = await ipos.find({ [`sources.${s}.lastFetched`]: { $exists: true } })
         .sort({ [`sources.${s}.lastFetched`]: -1 }).limit(1).project({ sources: 1 }).toArray();
-      out.push({
-        source: s,
-        ipos: count,
-        healthy: count > 0,
-        lastFetched: latest[0] ? latest[0].sources[s].lastFetched : null,
-      });
+      const lastFetched = latest[0] ? latest[0].sources[s].lastFetched : null;
+      const ageHours = lastFetched ? Math.round((now - new Date(lastFetched).getTime()) / 36e5) : null;
+      let status = 'healthy';
+      if (count === 0) status = 'down';
+      else if (ageHours == null || ageHours > STALE_AFTER_HOURS) status = 'stale';
+      out.push({ source: s, ipos: count, status, healthy: status === 'healthy', lastFetched, ageHours });
     }
     const lastScrape = (await collections.jobs().find({ type: 'scrape' }).sort({ createdAt: -1 }).limit(1).toArray())[0] || null;
-    res.json({ sources: out, lastScrape: lastScrape ? { jobId: lastScrape._id.toString(), status: lastScrape.status, at: lastScrape.createdAt } : null });
+    const unhealthy = out.filter((o) => o.status !== 'healthy').map((o) => o.source);
+    res.json({
+      sources: out,
+      unhealthy,                         // convenience list for alerting (Telegram later)
+      staleAfterHours: STALE_AFTER_HOURS,
+      lastScrape: lastScrape ? { jobId: lastScrape._id.toString(), status: lastScrape.status, at: lastScrape.createdAt } : null,
+    });
   }));
 
   // GET /stats — aggregated metrics for the dashboard overview (charts).
@@ -213,7 +336,7 @@ function buildApp(opts = {}) {
     const ipos = collections.ipos();
     const safe = async (p, fb) => { try { return await p; } catch { return fb; } };
 
-    const [total, byStatus, bySector, gmpLeaders, docCov, exStatus, exPipeline, jobsRaw] = await Promise.all([
+    const [total, byStatus, bySector, gmpLeaders, docCov, exStatus, exPipeline, jobsRaw, exQuality, exWorst] = await Promise.all([
       safe(ipos.estimatedDocumentCount(), 0),
       safe(ipos.aggregate([{ $group: { _id: '$status', count: { $sum: 1 } } }]).toArray(), []),
       safe(ipos.aggregate([
@@ -230,11 +353,21 @@ function buildApp(opts = {}) {
         _id: null,
         drhp: { $sum: { $cond: [{ $ifNull: ['$documents.drhp.url', false] }, 1, 0] } },
         rhp: { $sum: { $cond: [{ $ifNull: ['$documents.rhp.url', false] }, 1, 0] } },
-        final: { $sum: { $cond: [{ $ifNull: ['$documents.final.url', false] }, 1, 0] } },
       } }]).toArray(), []),
       safe(collections.extractions().aggregate([{ $group: { _id: '$status', count: { $sum: 1 } } }]).toArray(), []),
       safe(collections.extractions().aggregate([{ $group: { _id: '$pipeline', count: { $sum: 1 } } }]).toArray(), []),
       safe(collections.jobs().find({}).sort({ createdAt: -1 }).limit(400).project({ type: 1, status: 1, createdAt: 1 }).toArray(), []),
+      // validation quality: how many are scored + the mean score
+      safe(collections.extractions().aggregate([
+        { $match: { 'validation.score': { $ne: null } } },
+        { $group: { _id: null, scored: { $sum: 1 }, avg: { $avg: '$validation.score' } } },
+      ]).toArray(), []),
+      // worst offenders: lowest-scoring extractions still in the pipeline
+      safe(collections.extractions().aggregate([
+        { $match: { 'validation.score': { $ne: null }, status: { $ne: 'reviewed' } } },
+        { $project: { _id: 0, slug: '$ipoSlug', company: '$result.company_name', score: '$validation.score', status: 1, docType: 1, pipeline: 1 } },
+        { $sort: { score: 1 } }, { $limit: 6 },
+      ]).toArray(), []),
     ]);
 
     const toMap = (rows) => Object.fromEntries(rows.map((d) => [d._id || 'unknown', d.count]));
@@ -243,10 +376,25 @@ function buildApp(opts = {}) {
       byStatus: toMap(byStatus),
       bySector: bySector.map((d) => ({ sector: d._id, count: d.count })),
       gmpLeaders,
-      docCoverage: docCov[0] ? { drhp: docCov[0].drhp, rhp: docCov[0].rhp, final: docCov[0].final } : { drhp: 0, rhp: 0, final: 0 },
-      extractions: { byStatus: toMap(exStatus), byPipeline: toMap(exPipeline) },
+      docCoverage: docCov[0] ? { drhp: docCov[0].drhp, rhp: docCov[0].rhp } : { drhp: 0, rhp: 0 },
+      extractions: {
+        byStatus: toMap(exStatus),
+        byPipeline: toMap(exPipeline),
+        quality: {
+          scored: exQuality[0]?.scored || 0,
+          avgScore: exQuality[0]?.avg != null ? Math.round(exQuality[0].avg) : null,
+          worst: exWorst,
+        },
+      },
       jobs: jobsRaw.map((j) => ({ type: j.type, status: j.status, createdAt: j.createdAt })),
     });
+  }));
+
+  // GET /metrics/system — live host metrics (CPU, memory, disk, network) for
+  // the machine running this process. Reports localhost when run locally and
+  // the server when hit on the deployment. Polled by the dashboard System card.
+  app.get('/metrics/system', asyncH(async (_req, res) => {
+    res.json(await collectSystemMetrics());
   }));
 
   // API 2: GET /ipos/:slug — full details (merged, or ?raw=true)
@@ -312,16 +460,14 @@ function buildApp(opts = {}) {
       pipeline = 'cascade';
     }
 
-    // Auto-pick docType based on priority: final > rhp > drhp
+    // Auto-pick docType based on priority: rhp > drhp
     if (docType === 'auto' || !docType) {
-      if (ipo.documents?.final?.url) {
-        docType = 'final';
-      } else if (ipo.documents?.rhp?.url) {
+      if (ipo.documents?.rhp?.url) {
         docType = 'rhp';
       } else if (ipo.documents?.drhp?.url) {
         docType = 'drhp';
       } else {
-        return res.status(400).json({ error: 'No documents (final, rhp, or drhp) found for this IPO' });
+        return res.status(400).json({ error: 'No documents (rhp or drhp) found for this IPO' });
       }
     } else {
       const docUrl = ipo.documents?.[docType]?.url;
@@ -357,6 +503,9 @@ function buildApp(opts = {}) {
     if (status) filter.status = status;
     if (docType) filter.docType = docType;
     if (pipeline) filter.pipeline = pipeline;
+    // The review queue shouldn't list docs a better one has replaced (e.g. a
+    // DRHP superseded by the RHP) — there's nothing to action there.
+    if (status === 'review') filter.superseded = { $ne: true };
     const docs = await collections.extractions()
       .find(filter)
       .sort({ extractedAt: -1 })
@@ -368,9 +517,13 @@ function buildApp(opts = {}) {
         docType: r.docType,
         pipeline: r.pipeline,
         status: r.status,
+        superseded: !!r.superseded,
         extractedAt: r.extractedAt,
         reviewedAt: r.reviewedAt || null,
         companyName: r.result?.company_name || null,
+        score: r.validation?.score ?? null,
+        failedPhase: r.failedPhase || r.lastFailedPhase || null,
+        error: r.error || r.lastError || null,
         usage: r.usage || null,
       })),
     });
@@ -399,7 +552,110 @@ function buildApp(opts = {}) {
 
     const r = await collections.extractions().updateOne(filter, { $set: set });
     if (!r.matchedCount) return res.status(404).json({ error: 'No matching extraction', slug: req.params.slug, docType, pipeline });
+    // Keep the IPO's denormalized current-extraction pointer in step with the edit.
+    await reconcileExtractions(req.params.slug);
     res.json({ updated: req.params.slug, docType, pipeline, status: status || undefined });
+  }));
+
+  // POST /extractions/:slug/validate — re-score stored extraction(s) against the
+  // CURRENT ruleset, with NO LLM call. Use after editing rules, or to re-check a
+  // human-corrected result. Body: { docType?, pipeline? } narrows which to score.
+  // Does not overwrite a result already marked 'approved'/'reviewed' back to
+  // pending_review unless it was auto-status ('completed'/'pending_review'/'review').
+  app.post('/extractions/:slug/validate', asyncH(async (req, res) => {
+    const { docType, pipeline } = req.body || {};
+    const filter = { ipoSlug: req.params.slug };
+    if (docType) filter.docType = docType;
+    if (pipeline) filter.pipeline = pipeline;
+
+    const docs = await collections.extractions().find(filter).toArray();
+    if (!docs.length) return res.status(404).json({ error: 'No matching extraction', slug: req.params.slug });
+
+    const ipo = await findBySlug(req.params.slug);
+    const AUTO = new Set(['completed', 'pending_review', 'review', 'failed']);
+    const scored = [];
+    for (const d of docs) {
+      if (!d.result || d.pipeline === 'both') continue; // 'both' stores per-engine; skip
+      const validation = validationStore.validateExtraction(d.result, ipo || {});
+      const set = { validation };
+      // Only move auto-managed statuses; never override a human decision.
+      if (AUTO.has(d.status)) set.status = validation.status === 'pass' ? 'completed' : 'review';
+      await collections.extractions().updateOne({ _id: d._id }, { $set: set });
+      scored.push({ docType: d.docType, pipeline: d.pipeline, score: validation.score, status: set.status || d.status, failed: validation.failed });
+    }
+    // Re-scoring can flip statuses → refresh the IPO's current-extraction pointer.
+    await reconcileExtractions(req.params.slug);
+    res.json({ slug: req.params.slug, scored });
+  }));
+
+  // GET /extractions/:slug/compare — align stored extraction rows field-by-field
+  // across pipelines (no LLM), disagreements first. Query: ?docType= narrows it.
+  app.get('/extractions/:slug/compare', asyncH(async (req, res) => {
+    const filter = { ipoSlug: req.params.slug };
+    if (req.query.docType) filter.docType = req.query.docType;
+    const rows = await collections.extractions().find(filter).toArray();
+    if (!rows.length) return res.status(404).json({ error: 'No extractions', slug: req.params.slug });
+    res.json({ slug: req.params.slug, ...compareResults(rows, schemaStore.getFields()) });
+  }));
+
+  // ── Golden set (verified ground truth for regression eval) ─────────────────
+
+  // POST /extractions/:slug/golden — snapshot a verified result as ground truth.
+  // Body: { docType, pipeline }. Keyed by (slug, docType): one golden per document.
+  app.post('/extractions/:slug/golden', asyncH(async (req, res) => {
+    const { docType, pipeline } = req.body || {};
+    const filter = { ipoSlug: req.params.slug };
+    if (docType) filter.docType = docType;
+    if (pipeline) filter.pipeline = pipeline;
+    const ex = await collections.extractions().findOne(filter, { sort: { extractedAt: -1 } });
+    if (!ex || !ex.result) return res.status(404).json({ error: 'No extraction with a result to snapshot', slug: req.params.slug });
+    const doc = {
+      ipoSlug: ex.ipoSlug, docType: ex.docType, pipeline: ex.pipeline,
+      result: ex.result, fieldCount: Object.keys(ex.result).length,
+      capturedAt: new Date().toISOString(),
+    };
+    await collections.golden().updateOne({ ipoSlug: ex.ipoSlug, docType: ex.docType }, { $set: doc }, { upsert: true });
+    res.json({ golden: { ipoSlug: doc.ipoSlug, docType: doc.docType, fieldCount: doc.fieldCount } });
+  }));
+
+  // GET /golden — list golden records (without the full result blob).
+  app.get('/golden', asyncH(async (_req, res) => {
+    const docs = await collections.golden().find({}).sort({ capturedAt: -1 }).toArray();
+    res.json({ golden: docs.map((g) => ({ ipoSlug: g.ipoSlug, docType: g.docType, pipeline: g.pipeline, company: g.result?.company_name, fieldCount: g.fieldCount, capturedAt: g.capturedAt })) });
+  }));
+
+  // DELETE /golden/:slug — remove a golden (optionally a specific docType).
+  app.delete('/golden/:slug', asyncH(async (req, res) => {
+    const filter = { ipoSlug: req.params.slug };
+    if (req.query.docType) filter.docType = req.query.docType;
+    const r = await collections.golden().deleteMany(filter);
+    res.json({ deleted: r.deletedCount, slug: req.params.slug });
+  }));
+
+  // ── Eval (regression vs the golden set) ────────────────────────────────────
+
+  // POST /eval/run — re-extract every golden with the CURRENT schema + pipeline
+  // and score accuracy vs the golden. Heavy (one LLM call per golden) → heavy lane.
+  // Body: { pipeline?, limit?, wait? }.
+  app.post('/eval/run', asyncH(async (req, res) => {
+    const { pipeline = 'gemini', limit, wait = false } = req.body || {};
+    await runTracked(res,
+      { type: 'eval', params: { pipeline, limit }, longOp: true, wait },
+      (log) => runEval({ pipeline, limit, log }, { collections, findBySlug, testSchemaOnIpo }));
+  }));
+
+  // GET /eval/runs — recent eval runs (summary only).
+  app.get('/eval/runs', asyncH(async (_req, res) => {
+    const runs = await collections.evalRuns().find({}).sort({ createdAt: -1 }).limit(30).toArray();
+    res.json({ runs: runs.map((r) => ({ id: r._id.toString(), pipeline: r.pipeline, count: r.count, evaluated: r.evaluated, errors: r.errors, meanAccuracy: r.meanAccuracy, createdAt: r.createdAt })) });
+  }));
+
+  // GET /eval/runs/:id — one eval run with per-IPO detail.
+  app.get('/eval/runs/:id', asyncH(async (req, res) => {
+    let _id; try { _id = new (require('mongodb').ObjectId)(req.params.id); } catch { return res.status(400).json({ error: 'bad id' }); }
+    const run = await collections.evalRuns().findOne({ _id });
+    if (!run) return res.status(404).json({ error: 'run not found' });
+    res.json({ ...run, id: run._id.toString(), _id: undefined });
   }));
 
 
@@ -422,6 +678,27 @@ function buildApp(opts = {}) {
     if (!job) return res.status(404).json({ error: 'Job not found', id: req.params.id });
     res.json(job);
   }));
+
+  // GET /jobs/:id/stream — Server-Sent Events: push the job (status + logs) until
+  // it finishes, then close. The dashboard's EventSource uses ?token= (auth via
+  // query, since EventSource can't set headers). Replaces client-side polling.
+  app.get('/jobs/:id/stream', (req, res) => {
+    res.set({ 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive', 'X-Accel-Buffering': 'no' });
+    if (res.flushHeaders) res.flushHeaders();
+    let closed = false;
+    req.on('close', () => { closed = true; });
+    const tick = async () => {
+      if (closed) return;
+      try {
+        const job = await getJob(req.params.id);
+        if (!job) { res.write(`event: error\ndata: ${JSON.stringify({ error: 'not found' })}\n\n`); return res.end(); }
+        res.write(`data: ${JSON.stringify(job)}\n\n`);
+        if (job.status !== 'running') return res.end();
+      } catch (e) { /* transient — retry on next tick */ }
+      setTimeout(tick, 1500);
+    };
+    tick();
+  });
 
   // ── PDF Lab — interactive inspection tools ────────────────────────────────
 

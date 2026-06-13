@@ -516,12 +516,28 @@ function resetFields() {
   return FIELDS;
 }
 
+/**
+ * Run `fn` with a TEMPORARY field registry, restoring the previous one after
+ * (even on throw). Powers the schema "test on an IPO" preview: an edited, unsaved
+ * schema drives one extraction without mutating the live registry.
+ * NOTE: swaps the module-global FIELDS, so callers MUST serialize execution (the
+ * API runs this on the single-slot heavy lane) to avoid a concurrent extraction
+ * seeing the temporary schema.
+ */
+async function withFields(tempFields, fn) {
+  const prev = FIELDS;
+  FIELDS = validateFields(tempFields); // validate before swapping; throws on bad input
+  try { return await fn(); }
+  finally { FIELDS = prev; }
+}
+
 module.exports = {
   // registry access (runtime-mutable)
   getFields,
   getDefaultFields,
   setFields,
   resetFields,
+  withFields,
   validateFields,
   // derived (computed on demand)
   getStringFields,

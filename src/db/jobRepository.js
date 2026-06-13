@@ -16,11 +16,16 @@ async function createJob(type, params = {}) {
   return res.insertedId.toString();
 }
 
-/** Append a timestamped milestone log line to a job (best-effort, non-blocking). */
-function appendLog(id, msg) {
+/**
+ * Append a timestamped milestone log line to a job (best-effort, non-blocking).
+ * Optional `extra` attaches structured metadata to the entry (e.g. a repro
+ * `curl` string or `errorBody`) that the dashboard can surface as actions.
+ */
+function appendLog(id, msg, extra = {}) {
   const _id = oid(id);
   if (!_id) return Promise.resolve();
-  return collections.jobs().updateOne({ _id }, { $push: { logs: { at: new Date().toISOString(), msg: String(msg) } } }).catch(() => {});
+  const entry = { at: new Date().toISOString(), msg: String(msg), ...extra };
+  return collections.jobs().updateOne({ _id }, { $push: { logs: entry } }).catch(() => {});
 }
 
 async function completeJob(id, result, durationMs = null) {

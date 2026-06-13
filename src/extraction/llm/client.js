@@ -92,7 +92,7 @@ async function callLlmJson(prompt, opts = {}) {
   // Check cache first
   if (cache) {
     const key = generateCacheKey(cacheNs, prompt);
-    const cached = getCachedResponse(key);
+    const cached = await getCachedResponse(key);
     if (cached) return cached;
   }
 
@@ -117,10 +117,16 @@ async function callLlmJson(prompt, opts = {}) {
     log.debug('DeepSeek fallback succeeded');
   }
 
+  // Guard against a model returning a literal `null`/non-object JSON, which would
+  // otherwise crash callers that do result[key] / Object.keys(result).
+  if (result === null || typeof result !== 'object') {
+    throw new Error(`LLM returned non-object JSON (${result === null ? 'null' : typeof result})`);
+  }
+
   // Cache the result
   if (cache) {
     const key = generateCacheKey(cacheNs, prompt);
-    setCachedResponse(key, result);
+    await setCachedResponse(key, result);
   }
 
   return result;
@@ -141,7 +147,7 @@ async function callGeminiStructured(prompt, responseSchema, opts = {}) {
 
   if (cache) {
     const key = generateCacheKey('gemini_structured', prompt);
-    const cached = getCachedResponse(key);
+    const cached = await getCachedResponse(key);
     if (cached) return cached;
   }
 
@@ -164,7 +170,7 @@ async function callGeminiStructured(prompt, responseSchema, opts = {}) {
 
   if (cache) {
     const key = generateCacheKey('gemini_structured', prompt);
-    setCachedResponse(key, result);
+    await setCachedResponse(key, result);
   }
 
   return result;
