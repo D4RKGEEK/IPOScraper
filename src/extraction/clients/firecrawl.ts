@@ -48,16 +48,9 @@ async function firecrawlParse(file: Buffer, name: string, mime: string, formats:
   }, `fc-parse-${name}`);
 }
 
-/** LAYER 1 (primary): locally-built clean HTML → structured json + markdown. */
+/** The one paid extraction path: locally-built clean HTML → structured json + markdown. */
 export const parseHtmlJson = (html: string, name: string, schema: object): Promise<ParseResult> =>
   firecrawlParse(Buffer.from(html, 'utf8'), `${name}.html`, 'text/html', [
-    { type: 'json', schema, prompt: EXTRACT_PROMPT },
-    'markdown',
-  ]);
-
-/** LAYER 2 (table workhorse): mini-PDF → structured json + markdown (Firecrawl's native layout). */
-export const parsePdfJson = (pdf: Buffer, name: string, schema: object): Promise<ParseResult> =>
-  firecrawlParse(pdf, `${name}.pdf`, 'application/pdf', [
     { type: 'json', schema, prompt: EXTRACT_PROMPT },
     'markdown',
   ]);

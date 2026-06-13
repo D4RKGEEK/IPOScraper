@@ -13,7 +13,7 @@ import { openDoc, pagePng } from './pdf/mupdf-helpers';
 import { classifyDoc } from './classify';
 import { locateSections, type LocatedMap } from './locate';
 import { extractSection, type Ctx, type ExtractionClients } from './extract';
-import { parseHtmlJson, parsePdfJson } from './clients/firecrawl';
+import { parseHtmlJson } from './clients/firecrawl';
 import { deepseekJson, EXTRACT_SYSTEM } from './clients/deepseek';
 import { FIELDS, REGISTRY_SECTIONS, type DocType } from './registry/fields';
 import { claimNext, setStage, setStatus, setField, markPoison, expectedFields } from './state';
@@ -24,7 +24,6 @@ import { logEvent } from './db';
 
 const DEFAULT_CLIENTS: ExtractionClients = {
   parseHtmlJson,
-  parsePdfJson,
   deepseekJson,
   extractSystem: EXTRACT_SYSTEM,
 };

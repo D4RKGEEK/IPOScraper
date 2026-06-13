@@ -185,11 +185,16 @@ export const fieldByKey = (key: string): FieldDef | undefined => FIELDS.find((f)
 /** Sections that actually carry registry fields (drives the locator + ladder). */
 export const REGISTRY_SECTIONS = [...new Set(FIELDS.map((f) => f.section))];
 
-/** Build the JSON schema sent to Firecrawl/DeepSeek: each field wrapped in the evidence envelope. */
+/**
+ * Build the JSON schema sent to Firecrawl/DeepSeek: each field wrapped in the
+ * evidence envelope. `$refStrategy: 'none'` is REQUIRED — the envelope is reused
+ * across fields, so the default emits a `$ref`, and Firecrawl silently returns NO
+ * json when the schema contains `$ref`. Inlining every field fixes extraction.
+ */
 export function schemaFor(defs: FieldDef[]): object {
   const shape: Record<string, z.ZodTypeAny> = {};
   for (const d of defs) {
     shape[d.key] = envelope(d.schema.nullable()).describe(d.description);
   }
-  return zodToJsonSchema(z.object(shape));
+  return zodToJsonSchema(z.object(shape), { $refStrategy: 'none' });
 }

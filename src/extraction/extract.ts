@@ -15,13 +15,12 @@ import type { Db } from 'mongodb';
 import type { R2 } from './r2';
 import { FIELDS, schemaFor, type DocType, type FieldDef } from './registry/fields';
 import { validateField, type FieldPayload } from './validate';
-import { miniPdf, rangeText, pagePng } from './pdf/mupdf-helpers';
+import { rangeText, pagePng } from './pdf/mupdf-helpers';
 import { sectionToHtml } from './pdf/to-markdown';
 import type { ParseResult } from './clients/firecrawl';
 
 export interface ExtractionClients {
   parseHtmlJson: (html: string, name: string, schema: object) => Promise<ParseResult>;
-  parsePdfJson: (pdf: Buffer, name: string, schema: object) => Promise<ParseResult>;
   deepseekJson: (system: string, user: string, onTokens?: (t: number) => void) => Promise<unknown>;
   extractSystem: (schemaText: string) => string;
 }
@@ -50,8 +49,6 @@ export interface Ctx {
   /** Field-extraction ladder may fall through to DeepSeek (CFG.extract.useDeepseek). */
   useDeepseek: boolean;
 }
-
-const TABLE_CONFIDENCE_FLOOR = 0.7;
 
 export interface ExtractOpts {
   /** Restrict this pass to these field keys (e.g. the still-open set). */
@@ -100,12 +97,10 @@ export async function extractSection(
     }
   };
 
-  // ── Layer 1: Firecrawl /parse on local clean HTML (primary — cheap credits) ─────
-  // tableConfidence router (PRD §9): if local table detection was inconsistent the
-  // emitted HTML tables will be malformed too — skip straight to the real-layout
-  // mini-PDF instead of paying for a doomed cheap call.
-  const htmlViable = tableConfidence >= TABLE_CONFIDENCE_FLOOR && !ctx.isScanned;
-  if (htmlViable) {
+  // ── Layer 1: clean HTML of the located range → Firecrawl /parse (the only paid path) ──
+  // One call per section. No mini-PDF (each /parse is metered): Firecrawl's extractor
+  // reads the HTML tables we build even when local column detection is imperfect.
+  if (!ctx.isScanned) {
     const res1 = await ctx.clients.parseHtmlJson(html, section, schemaFor(defs)).catch((e: unknown) => {
       ctx.log(`L1 firecrawl_html failed for ${section}: ${String(e)}`);
       return { json: null, markdown: '' } as ParseResult;
@@ -113,26 +108,7 @@ export async function extractSection(
     if (res1.json) settle(res1.json, 'firecrawl_md', res1.markdown + '\n' + sectionText);
   }
 
-  // ── Layer 2: mini-PDF to Firecrawl /parse (real PDF layout — the table workhorse) ─
-  const open2 = defs.filter((d) => !results[d.key]);
-  if (open2.length) {
-    const mini = miniPdf(ctx.pdfBuf, range.start, range.end);
-    const res2 = await ctx.clients.parsePdfJson(mini, section, schemaFor(open2)).catch((e: unknown) => {
-      ctx.log(`L2 firecrawl_pdf failed for ${section}: ${String(e)}`);
-      return { json: null, markdown: '' } as ParseResult;
-    });
-    if (res2.json) {
-      // mini-PDF pages renumber from 1; map them back to original doc pages.
-      for (const v of Object.values(res2.json)) {
-        const pv = v as { page?: unknown };
-        if (typeof pv.page === 'number') pv.page = pv.page + range.start;
-      }
-      // evidence checked against Firecrawl's own markdown (+ raw text fallback).
-      settle(res2.json, 'firecrawl_pdf', res2.markdown + '\n' + sectionText);
-    }
-  }
-
-  // ── Layer 3: DeepSeek — last resort, OFF by default (CFG.extract.useDeepseek) ────
+  // ── Layer 2: DeepSeek — last resort, OFF by default (CFG.extract.useDeepseek) ────
   if (ctx.useDeepseek && !ctx.isScanned) {
     const open3 = defs.filter((d) => !results[d.key]);
     if (open3.length) {
@@ -182,7 +158,7 @@ export async function extractSection(
   ctx.log(
     `section ${section}${finalPass ? '' : ' (front-matter)'}: ` +
       `${Object.values(results).filter((r) => r.status === 'validated').length}/${defs.length} validated` +
-      ` (tableConfidence ${tableConfidence.toFixed(2)}${htmlViable ? '' : ' → html path skipped'})`,
+      ` (tableConfidence ${tableConfidence.toFixed(2)}${ctx.isScanned ? ' → scanned, html skipped' : ''})`,
   );
 }
 
