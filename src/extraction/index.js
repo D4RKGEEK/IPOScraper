@@ -94,14 +94,6 @@ ${mergedText}`;
 
 // ── PDF download ─────────────────────────────────────────────────────────────
 
-/**
- * Download a PDF from a URL to a local file. Skips if already exists (unless forced).
- *
- * @param {string} url       PDF URL
- * @param {string} outputDir Directory to save to
- * @param {boolean} [force]  Re-download even if cached
- * @returns {Promise<string>} Local file path
- */
 async function downloadPdf(url, outputDir, force = false) {
   fs.mkdirSync(outputDir, { recursive: true });
 
@@ -121,10 +113,28 @@ async function downloadPdf(url, outputDir, force = false) {
   const res = await fetch(url);
   if (!res.ok) throw new Error(`PDF download failed: ${res.status} ${res.statusText}`);
 
+  const contentLength = parseInt(res.headers.get('content-length'), 10);
+
   const fileStream = fs.createWriteStream(localPath);
-  await streamPipeline(res.body, fileStream);
+  try {
+    await streamPipeline(res.body, fileStream);
+  } catch (err) {
+    if (fs.existsSync(localPath)) {
+      try { fs.unlinkSync(localPath); } catch (e) {}
+    }
+    throw err;
+  }
 
   const stats = fs.statSync(localPath);
+
+  // Validate size against content-length if provided to prevent caching truncated downloads
+  if (!isNaN(contentLength) && stats.size < contentLength) {
+    if (fs.existsSync(localPath)) {
+      try { fs.unlinkSync(localPath); } catch (e) {}
+    }
+    throw new Error(`PDF download truncated: got ${stats.size} bytes of expected ${contentLength}`);
+  }
+
   log.info({ localPath, bytes: stats.size }, 'PDF downloaded');
 
   return localPath;
@@ -243,7 +253,7 @@ async function runExtraction(ipo, opts = {}) {
     // 1. Try Firecrawl first
     logMsg('1/3: running Firecrawl extraction...');
     try {
-      const sectionResponses = await runFirecrawlExtraction(outputDir, converted, ipo.slug);
+      const sectionResponses = await runFirecrawlExtraction(outputDir, converted, ipo.slug, logMsg);
       results.firecrawl = mergeSectionResponses(sectionResponses);
 
       // Save merged result
@@ -310,7 +320,7 @@ async function runExtraction(ipo, opts = {}) {
     if (pipeline === 'firecrawl' || pipeline === 'both') {
       logMsg('running Firecrawl extraction...');
       try {
-        const sectionResponses = await runFirecrawlExtraction(outputDir, converted, ipo.slug);
+        const sectionResponses = await runFirecrawlExtraction(outputDir, converted, ipo.slug, logMsg);
         results.firecrawl = mergeSectionResponses(sectionResponses);
 
         // Save merged result

@@ -67,16 +67,36 @@ async function getPageTexts(pdfPath, startPage, endPage) {
   return runPython(['text', pdfPath, String(startPage), String(endPage)]);
 }
 
+const CHUNK_SIZE = 15; // pages per Python call (large ranges can hang pymupdf4llm)
+
 /**
  * Convert a range of PDF pages to markdown using pymupdf4llm.
  * Preserves tables, headings, bold text.
+ *
+ * Large ranges are chunked (CHUNK_SIZE pages at a time) to avoid
+ * pymupdf4llm hanging on big page spans.
+ *
  * @param {string} pdfPath
  * @param {number} startPage  0-indexed inclusive
  * @param {number} endPage    0-indexed inclusive
- * @returns {Promise<string>} Markdown text
+ * @returns {Promise<string>} Concatenated markdown text
  */
 async function pagesToMarkdown(pdfPath, startPage, endPage) {
-  return runPython(['markdown', pdfPath, String(startPage), String(endPage)]);
+  const total = endPage - startPage + 1;
+  if (total <= CHUNK_SIZE) {
+    return runPython(['markdown', pdfPath, String(startPage), String(endPage)]);
+  }
+
+  log.info({ startPage, endPage, total, chunkSize: CHUNK_SIZE }, 'chunking large markdown conversion');
+
+  const parts = [];
+  for (let s = startPage; s <= endPage; s += CHUNK_SIZE) {
+    const e = Math.min(s + CHUNK_SIZE - 1, endPage);
+    const md = await runPython(['markdown', pdfPath, String(s), String(e)]);
+    parts.push(md);
+  }
+
+  return parts.join('\n\n');
 }
 
 module.exports = { getPageCount, getPageTexts, pagesToMarkdown };

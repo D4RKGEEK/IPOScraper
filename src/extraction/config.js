@@ -14,116 +14,31 @@
 // Each key is the canonical section name used throughout the pipeline.
 // Values are lowercase alias substrings matched against ToC headings.
 const SECTION_ALIASES = {
-  CAPITAL_STRUCTURE: [
-    'capital structure',
-    'capitalisation statement',
-    'capitalization statement',
-  ],
-  OBJECTS_OF_THE_OFFER: [
-    'objects of the offer',
-    'objects of the issue',
-    'use of proceeds',
-    'object of the offer',
-  ],
-  RESTATED_FINANCIAL_STATEMENTS: [
-    'restated financial statements',
-    'audited financial statements',
-    'restated consolidated financial statements',
-    'restated standalone financial statements',
-    'financial statements',
-  ],
-  RISK_FACTORS: [
-    'risk factors',
-    'risk factor',
-  ],
-  OUR_BUSINESS: [
-    'our business',
-    'business overview',
-    'overview of our business',
-    'description of business',
-  ],
-  BASIS_FOR_OFFER_PRICE: [
-    'basis for offer price',
-    'basis for issue price',
-    'basis of offer price',
-  ],
-  ABOUT_THE_ISSUER: [
-    'about the issuer company',
-    'about our company',
-    'about us',
-    'general information',
-  ],
-  DIVIDEND_POLICY: [
-    'dividend policy',
-    'dividends',
-  ],
-  OUTSTANDING_LITIGATION: [
-    'outstanding litigation',
-    'litigation and material developments',
-    'legal proceedings',
-  ],
-  MANAGEMENT: [
-    'our management',
-    'board of directors',
-    'our board of directors',
-    'management',
-  ],
-  PROMOTERS: [
-    'our promoter',
-    'our promoters',
-    'promoter group',
-    'promoters and promoter group',
-  ],
-  INDUSTRY_OVERVIEW: [
-    'industry overview',
-    'industry',
-    'our industry',
-  ],
-  REGULATIONS: [
-    'regulations and policies',
-    'key regulations',
-    'regulations',
-  ],
-  FINANCIAL_INFORMATION: [
-    'financial information',
-    'financial data',
-  ],
-  HISTORY_AND_CORPORATE_STRUCTURE: [
-    'history and certain corporate matters',
-    'history and corporate structure',
-    'our history',
-  ],
-  OFFER_STRUCTURE: [
-    'offer structure',
-    'issue structure',
-    'terms of the offer',
-    'terms of the issue',
-  ],
-  KEY_PERFORMANCE_INDICATORS: [
-    'key performance indicators',
-    'key operational and financial parameters',
-  ],
-  RELATED_PARTY_TRANSACTIONS: [
-    'related party transactions',
-  ],
-  STOCK_MARKET_DATA: [
-    'stock market data',
-    'stock market information',
-  ],
-  ANCHOR_INVESTOR: [
-    'anchor investor',
-    'basis of allocation',
-    'basis of allotment',
-  ],
+  GENERAL_INFORMATION: ["general information", "general information of the company"],
+  CAPITAL_STRUCTURE: ["capital structure", "capital structure of the company", "capitalisation statement"],
+  OBJECTS_OF_THE_OFFER: ["objects of the offer", "objects of the issue", "use of proceeds", "utilization of proceeds", "objects of the fresh issue"],
+  BASIS_FOR_OFFER_PRICE: ["basis for offer price", "basis for issue price", "basis of offer price", "basis of issue price"],
+  RESTATED_FINANCIAL_STATEMENTS: ["restated financial statements", "restated financial information", "restated consolidated financial statements", "audited financial statements"],
+  RISK_FACTORS: ["risk factors"],
+  OUR_MANAGEMENT: ["our management"],
+  OUR_PROMOTERS_AND_PROMOTER_GROUP: ["our promoters and promoter group", "our promoters & promoter group"],
+  DIVIDEND_POLICY: ["dividend policy"],
+  INDUSTRY_OVERVIEW: ["industry overview"],
+  OUR_BUSINESS: ["our business", "business overview"],
+  STATEMENT_OF_SPECIAL_TAX_BENEFITS: ["statement of special tax benefits", "statement of possible special tax benefits", "statement of tax benefits"],
+  OTHER_FINANCIAL_INFORMATION: ["other financial information"],
+  STATEMENT_OF_FINANCIAL_INDEBTEDNESS: ["statement of financial indebtedness", "financial indebtedness"],
+  OUTSTANDING_LITIGATION: ["outstanding litigation", "outstanding litigation and material developments"],
+  ISSUE_PROCEDURE: ["issue procedure", "terms of the issue", "terms of the offer"],
+  ISSUE_STRUCTURE: ["issue structure", "offer structure"],
+  OUR_GROUP_COMPANIES: ["our group companies", "our group company"],
+  KEY_REGULATIONS_AND_POLICIES: ["key regulations and policies", "key industry regulations and policies", "government and other approvals"],
+  HISTORY_AND_CERTAIN_CORPORATE_MATTERS: ["history and certain corporate matters", "history and corporate structure"],
+  ABOUT_THE_COMPANY: ["about the company", "about our company"],
 };
 
 // ── Target sections (default set to extract) ─────────────────────────────────
-const TARGET_SECTIONS = [
-  'RISK_FACTORS',
-  'CAPITAL_STRUCTURE',
-  'OBJECTS_OF_THE_OFFER',
-  'OUR_BUSINESS',
-];
+const TARGET_SECTIONS = ["RISK_FACTORS", "CAPITAL_STRUCTURE", "OBJECTS_OF_THE_OFFER", "OUR_BUSINESS"];
 
 // ── Environment configuration ────────────────────────────────────────────────
 const env = {
@@ -133,7 +48,11 @@ const env = {
   FIRECRAWL_API_URL: process.env.FIRECRAWL_API_URL || 'https://api.firecrawl.dev/v2/parse',
 
   // Python executable path (override if using a venv)
-  PYTHON_BIN: process.env.PYTHON_BIN || require('path').join(__dirname, 'python', '.venv', 'bin', 'python3'),
+  PYTHON_BIN: (() => {
+    const p = process.env.PYTHON_BIN;
+    if (p && p !== 'python3' && p !== 'python' && p !== 'python3.12') return p;
+    return require('path').join(__dirname, 'python', '.venv', 'bin', 'python3');
+  })(),
 
   // Output directories
   // Production: use /tmp (ephemeral, cleaned up after each run)

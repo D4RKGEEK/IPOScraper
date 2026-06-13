@@ -46,6 +46,17 @@ def cmd_text(pdf_path, start_page, end_page):
 
 def cmd_markdown(pdf_path, start_page, end_page):
     import pymupdf4llm
+    import fitz
+    
+    doc = fitz.open(pdf_path)
+    total_pages = len(doc)
+    doc.close()
+    
+    if start_page >= total_pages:
+        respond("")
+        return
+        
+    end_page = min(end_page, total_pages - 1)
     page_list = list(range(start_page, end_page + 1))
     md = pymupdf4llm.to_markdown(pdf_path, pages=page_list)
     respond(md)
