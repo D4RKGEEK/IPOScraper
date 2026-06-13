@@ -48,12 +48,15 @@ describe('computeProgress (PRD §7.2 stage weights)', () => {
   });
 });
 
-describe('expectedFields (PRD §8 S2 / #17)', () => {
-  it('DRHP excludes price band, lot size and dates by law', () => {
+describe('expectedFields (placeholder model)', () => {
+  it('DRHP expects every field — values absent in the DRHP become [.] placeholders, not not_expected', () => {
     const drhp = expectedFields('DRHP');
-    expect(drhp).not.toContain('price_band');
-    expect(drhp).not.toContain('lot_size');
-    expect(drhp).not.toContain('issue_open_date');
+    // Under the placeholder model a DRHP still "expects" price band / lot size / dates;
+    // when they are "[●]" in the document they are stored as placeholders and a later
+    // RHP/Prospectus overwrites them.
+    expect(drhp).toContain('price_band');
+    expect(drhp).toContain('lot_size');
+    expect(drhp).toContain('issue_open_date');
     expect(drhp).toContain('promoter_pct');
   });
   it('PROSPECTUS expects everything', () => {

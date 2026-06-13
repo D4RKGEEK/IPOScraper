@@ -20,24 +20,31 @@ export async function mergeIpoRecord(db: Db, doc: MongoDoc): Promise<void> {
   const existing = (await ipos.findOne({ _id: slug as never })) ?? { fields: {}, documents: [] };
   const fields = { ...(existing.fields ?? {}) } as Record<
     string,
-    { value: unknown; fromDoc: string; fromType: DocType; page: number | null; processedAt: Date }
+    { value: unknown; status: string; fromDoc: string; fromType: DocType; page: number | null; processedAt: Date }
   >;
 
   const now = new Date();
   const docFields = (doc.fields ?? {}) as Record<string, { status?: string; value?: unknown; page?: number }>;
   for (const def of FIELDS) {
     const f = docFields[def.key];
-    if (!f || f.status !== 'validated') continue; // §12 invariant: only verified values merge
+    // Merge real values AND placeholders: a placeholder ('[.]') holds the slot until a
+    // stronger document supplies the real value (user's DRHP→RHP rule).
+    if (!f || (f.status !== 'validated' && f.status !== 'placeholder')) continue;
     const cur = fields[def.key];
+    const incomingValidated = f.status === 'validated';
+    const curValidated = cur?.status === 'validated';
     const incomingRank = RANK[docType];
     const curRank = cur ? RANK[cur.fromType] ?? -1 : -1;
-    // Stronger type wins; equal type → newer processedAt wins (fallback #33);
-    // ADDENDUM (rank 0) patches only gaps it explicitly contains.
-    const overwrite =
-      !cur || incomingRank > curRank || (incomingRank === curRank && now >= cur.processedAt);
+    let overwrite: boolean;
+    if (!cur) overwrite = true;
+    else if (incomingValidated && !curValidated) overwrite = true;   // real value replaces a placeholder
+    else if (!incomingValidated && curValidated) overwrite = false;  // never downgrade real → placeholder
+    // same tier (both real or both placeholder): stronger doc wins, then newer (#33).
+    else overwrite = incomingRank > curRank || (incomingRank === curRank && now >= cur.processedAt);
     if (overwrite) {
       fields[def.key] = {
         value: f.value,
+        status: f.status as string,
         fromDoc: String(doc._id),
         fromType: docType,
         page: f.page ?? null,
@@ -49,7 +56,8 @@ export async function mergeIpoRecord(db: Db, doc: MongoDoc): Promise<void> {
   const expected = FIELDS.filter((f) =>
     docType === 'ADDENDUM' ? true : f.expectedIn.includes(docType),
   ).length;
-  const filled = Object.keys(fields).length;
+  const filled = Object.values(fields).filter((f) => f.status === 'validated').length;
+  const placeholders = Object.values(fields).filter((f) => f.status === 'placeholder').length;
   const needsReview = Object.values(docFields).filter((f) => f.status === 'needs_review').length;
 
   const documents = [
@@ -67,10 +75,10 @@ export async function mergeIpoRecord(db: Db, doc: MongoDoc): Promise<void> {
     {
       $set: {
         company: (doc.sourceMeta as { company?: string } | undefined)?.company ?? existing.company ?? null,
-        isin: (fields['isin']?.value as string | undefined) ?? existing.isin ?? null,
+        isin: (fields['isin']?.status === 'validated' ? (fields['isin']?.value as string) : undefined) ?? existing.isin ?? null,
         fields,
         documents,
-        completeness: { expected, filled, needsReview },
+        completeness: { expected, filled, placeholders, needsReview },
         updatedAt: now,
       },
     },

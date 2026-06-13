@@ -13,7 +13,7 @@
 import type * as mupdf from 'mupdf';
 import type { Db } from 'mongodb';
 import type { R2 } from './r2';
-import { FIELDS, schemaFor, type DocType, type FieldDef } from './registry/fields';
+import { FIELDS, schemaFor, PLACEHOLDER, type DocType, type FieldDef } from './registry/fields';
 import { validateField, type FieldPayload } from './validate';
 import { rangeText, pagePng } from './pdf/mupdf-helpers';
 import { sectionToHtml } from './pdf/to-markdown';
@@ -138,12 +138,12 @@ export async function extractSection(
   }
 
   if (finalPass) {
-    // ── Layer 4: review floor — never guess ──────────────────────────────────
+    // ── Layer 4: placeholder floor — not found in THIS doc; a stronger document
+    // (DRHP → RHP → Prospectus) may carry the real value and overwrite it (merge). ──
     for (const d of defs.filter((d) => !results[d.key])) {
-      await queueReview(ctx, d, range, ctx.lastError(d.key) ?? 'ladder_exhausted');
-      results[d.key] = { value: null, status: 'needs_review' };
+      results[d.key] = { value: PLACEHOLDER, status: 'placeholder' };
     }
-    // High-stakes disagreement check — straight to review, no silent tiebreak.
+    // High-stakes disagreement → human review (a genuine conflict, not a miss).
     for (const d of defs.filter((d) => d.highStakes)) {
       const vals = Object.values(ctx.allLayerValues(d.key)).filter((v) => v !== null && v !== undefined);
       if (vals.length > 1 && new Set(vals.map((v) => JSON.stringify(v))).size > 1) {

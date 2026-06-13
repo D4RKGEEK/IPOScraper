@@ -9,13 +9,13 @@ import type * as mupdf from 'mupdf';
 import { CFG } from './config';
 import type { R2 } from './r2';
 import { sleep } from './util/retry';
-import { openDoc, pagePng } from './pdf/mupdf-helpers';
+import { openDoc } from './pdf/mupdf-helpers';
 import { classifyDoc } from './classify';
 import { locateSections, type LocatedMap } from './locate';
 import { extractSection, type Ctx, type ExtractionClients } from './extract';
 import { parseHtmlJson } from './clients/firecrawl';
 import { deepseekJson, EXTRACT_SYSTEM } from './clients/deepseek';
-import { FIELDS, REGISTRY_SECTIONS, type DocType } from './registry/fields';
+import { FIELDS, REGISTRY_SECTIONS, PLACEHOLDER, type DocType } from './registry/fields';
 import { claimNext, setStage, setStatus, setField, markPoison, expectedFields } from './state';
 import { ingest } from './ingest';
 import { mergeIpoRecord } from './merge';
@@ -118,26 +118,22 @@ export async function processDoc(
 
     // ── S3 locate (cached forever — re-extraction never re-locates) ───────────────
     let map = (state.stages?.located?.map ?? null) as LocatedMap | null;
+    let unresolved = (state.stages?.located?.unresolved ?? []) as string[];
     if (!state.stages?.located?.done) {
       await setStatus(db, id, 'locating');
       const t0 = Date.now();
-      const { map: located, unresolved } = await locateSections(pdfDoc, {
+      const located = await locateSections(pdfDoc, {
         deepseek: (s, u) => clients.deepseekJson(s, u),
         log,
         onAliasSuggestion: (section, hint) =>
           void logEvent(id, 'alias_suggestion', { section, hint }), // §8 L-D
       });
-      map = located;
+      map = located.map;
+      unresolved = located.unresolved;
       await setStage(db, id, 'located', Date.now() - t0, { map, unresolved });
-      // Every field in an unresolved section is born needs_review (§8 L-E, #7/#8).
-      const ctx0 = makeCtx(db, r2, id, state, buf, pdfDoc, clients, log);
-      for (const section of unresolved.filter((s) => REGISTRY_SECTIONS.includes(s))) {
-        for (const f of FIELDS.filter((f) => f.section === section)) {
-          const cur = ((await documents.findOne({ _id: id as never })) as MongoDoc).fields?.[f.key];
-          if (cur?.status === 'validated' || cur?.status === 'not_expected') continue;
-          await queueUnlocatedReview(ctx0, f.key, `section_unresolved: ${section}`);
-        }
-      }
+      // NOTE: unresolved-section fields are NOT marked needs_review here. The cover
+      // sweep (S4) extracts the scattered commercial terms from pages 0-2 regardless
+      // of section location; only what survives both passes is queued for review.
       state = (await documents.findOne({ _id: id as never })) as MongoDoc;
     }
     checkBudget();
@@ -178,6 +174,19 @@ export async function processDoc(
         { $set: { 'progress.stageDetail': `section ${section} (${i}/${sections.length})` } },
       );
       await extractSection(ctx, section, range, { only: open });
+    }
+
+    // Unresolved sections never entered the located loop: whatever the cover sweep
+    // didn't validate is queued for human review now (§8 L-E, #7/#8).
+    // Unresolved sections never entered the located loop: whatever the cover sweep
+    // didn't validate becomes a placeholder ('[.]') — pending a stronger document.
+    const afterExtract = (await documents.findOne({ _id: id as never })) as MongoDoc;
+    for (const section of unresolved.filter((s) => REGISTRY_SECTIONS.includes(s))) {
+      for (const f of FIELDS.filter((f) => f.section === section)) {
+        const st = (afterExtract.fields?.[f.key] as { status?: string } | undefined)?.status ?? '';
+        if (['validated', 'not_expected', 'needs_review', 'placeholder'].includes(st)) continue;
+        await setField(db, id, f.key, { value: PLACEHOLDER, status: 'placeholder' });
+      }
     }
     await setStage(db, id, 'extracted', 0);
 
@@ -273,20 +282,3 @@ function makeCtx(
   };
 }
 
-async function queueUnlocatedReview(ctx: Ctx, key: string, reason: string): Promise<void> {
-  const imageKey = `review/${ctx.hash}/${key}.png`;
-  try {
-    await ctx.r2.put(imageKey, pagePng(ctx.pdfBuf, 0), 'image/png');
-  } catch { /* degrade: review entry without image (fallback #28) */ }
-  await ctx.db.collection('review_queue').updateOne(
-    { docHash: ctx.hash, field: key, status: 'open' },
-    {
-      $set: {
-        docHash: ctx.hash, field: key, pages: [1], bestGuess: null, lastError: reason,
-        candidates: {}, imageKey, status: 'open', resolvedValue: null, resolvedBy: null, resolvedAt: null,
-      },
-    },
-    { upsert: true },
-  );
-  await ctx.setField(key, { value: null, status: 'needs_review', reason });
-}

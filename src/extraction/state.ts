@@ -49,16 +49,18 @@ export function expectedFields(docType: DocType | 'UNKNOWN'): string[] {
 export function computeProgress(doc: MongoDoc): Record<string, unknown> {
   const fields = (doc.fields ?? {}) as Record<string, { status?: string }>;
   const total = FIELDS.length;
-  let validated = 0; let review = 0; let notExpected = 0;
+  let validated = 0; let review = 0; let notExpected = 0; let placeholder = 0;
   for (const key of Object.keys(fields)) {
     const s = fields[key]?.status;
     if (s === 'validated') validated++;
     else if (s === 'needs_review') review++;
     else if (s === 'not_expected') notExpected++;
+    else if (s === 'placeholder') placeholder++;
   }
   // The classifier persists not_expected fields up front (S2), so counting the
-  // fields map alone is sufficient — no double counting.
-  const settled = validated + review + notExpected;
+  // fields map alone is sufficient — no double counting. A placeholder ('[.]') is
+  // settled: resolved as "not in this doc, pending a stronger one".
+  const settled = validated + review + notExpected + placeholder;
   const pending = Math.max(0, total - settled);
 
   // Stage weights (PRD §7.2): fetch 5, classify 5, locate 15,
@@ -82,6 +84,7 @@ export function computeProgress(doc: MongoDoc): Record<string, unknown> {
     fieldsReview: review,
     fieldsPending: pending,
     fieldsNotExpected: notExpected,
+    fieldsPlaceholder: placeholder,
   };
 }
 
