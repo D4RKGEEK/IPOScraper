@@ -44,7 +44,7 @@ async function getSectionRanges(pdfPath, targetSections, progressLog) {
   const regexFound = new Set();
 
   if (tocPages.length) {
-    tocMapping = await regexExtractTocMapping(pdfPath, tocPages);
+    tocMapping = await regexExtractTocMapping(pdfPath, tocPages, totalPages);
     for (const key of Object.keys(tocMapping)) regexFound.add(key);
     logMsg(`regex ToC found: ${Object.keys(tocMapping).join(', ') || 'none'}`);
   } else {

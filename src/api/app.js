@@ -13,6 +13,7 @@ const { runScrape, ALL_SOURCES } = require('../services/scrapeService');
 const { runGmp } = require('../services/gmpService');
 const { runHistorical } = require('../services/historicalService');
 const { runExtraction, runBulkExtraction } = require('../extraction');
+const { FIELDS, DEFAULT_VALUE } = require('../extraction/llm/schema');
 const { createJob, appendLog, completeJob, failJob, getJob, listJobs } = require('../db/jobRepository');
 const { logger, requestLogger } = require('../utils/logger');
 
@@ -93,6 +94,12 @@ function buildApp(opts = {}) {
     const count = await collections.ipos().estimatedDocumentCount();
     res.json({ ok: true, ipos: count });
   }));
+
+  // GET /schema — the canonical extraction field registry, so the dashboard can
+  // render any extraction dynamically and stay in sync with llm/schema.js.
+  app.get('/schema', (_req, res) => {
+    res.json({ fields: FIELDS, defaultValue: DEFAULT_VALUE });
+  });
 
   // API 1: GET /ipos — meta/index
   app.get('/ipos', asyncH(async (req, res) => {
@@ -220,11 +227,57 @@ function buildApp(opts = {}) {
       (log) => runBulkExtraction({ pipeline, docType, status, force, log }));
   }));
 
+  // GET /extractions — list extractions (review queue / overview).
+  // Query: ?status=review&docType=&pipeline=&limit=  (default newest first)
+  app.get('/extractions', asyncH(async (req, res) => {
+    const { status, docType, pipeline, limit = 100 } = req.query;
+    const filter = {};
+    if (status) filter.status = status;
+    if (docType) filter.docType = docType;
+    if (pipeline) filter.pipeline = pipeline;
+    const docs = await collections.extractions()
+      .find(filter)
+      .sort({ extractedAt: -1 })
+      .limit(Math.min(500, parseInt(limit, 10) || 100))
+      .toArray();
+    res.json({
+      extractions: docs.map((r) => ({
+        ipoSlug: r.ipoSlug,
+        docType: r.docType,
+        pipeline: r.pipeline,
+        status: r.status,
+        extractedAt: r.extractedAt,
+        reviewedAt: r.reviewedAt || null,
+        companyName: r.result?.company_name || null,
+        usage: r.usage || null,
+      })),
+    });
+  }));
+
   // GET /extractions/:slug — get extraction results for an IPO
   app.get('/extractions/:slug', asyncH(async (req, res) => {
     const results = await collections.extractions().find({ ipoSlug: req.params.slug }).toArray();
     if (!results.length) return res.status(404).json({ error: 'No extractions found', slug: req.params.slug });
     res.json({ slug: req.params.slug, extractions: results.map((r) => ({ ...r, _id: undefined })) });
+  }));
+
+  // PATCH /extractions/:slug — save human corrections / resolve a review.
+  // Body: { docType, pipeline, result?, status? }. docType + pipeline identify
+  // which extraction (an IPO can have several); result replaces the stored
+  // result, status moves it through the review workflow (e.g. 'reviewed').
+  app.patch('/extractions/:slug', asyncH(async (req, res) => {
+    const { docType, pipeline, result, status } = req.body || {};
+    const filter = { ipoSlug: req.params.slug };
+    if (docType) filter.docType = docType;
+    if (pipeline) filter.pipeline = pipeline;
+
+    const set = { reviewedAt: new Date().toISOString() };
+    if (result && typeof result === 'object') set.result = result;
+    if (status) set.status = status;
+
+    const r = await collections.extractions().updateOne(filter, { $set: set });
+    if (!r.matchedCount) return res.status(404).json({ error: 'No matching extraction', slug: req.params.slug, docType, pipeline });
+    res.json({ updated: req.params.slug, docType, pipeline, status: status || undefined });
   }));
 
 
