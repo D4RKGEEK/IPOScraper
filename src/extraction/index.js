@@ -28,6 +28,70 @@ const { logger } = require('../utils/logger');
 
 const log = logger.child({ module: 'extraction' });
 
+/**
+ * Check if the extraction output is proper/complete.
+ * Must have company_name and at least 8 populated fields.
+ */
+function isExtractionProper(result) {
+  if (!result || typeof result !== 'object') return false;
+  if (!result.company_name) return false;
+
+  let populatedCount = 0;
+  for (const [key, val] of Object.entries(result)) {
+    if (val !== null && val !== undefined && val !== '') {
+      if (Array.isArray(val) && val.length === 0) continue;
+      populatedCount++;
+    }
+  }
+
+  return populatedCount >= 8;
+}
+
+/**
+ * DeepSeek structured extraction fallback.
+ */
+async function runDeepSeekExtraction(outputDir, sections) {
+  const { callLlmJson } = require('./llm/client');
+  const { IPO_DETAILS_SCHEMA } = require('./llm/schema');
+
+  // Read merged markdown
+  const mergedPath = path.join(outputDir, 'merged.md');
+  let mergedText = '';
+  if (fs.existsSync(mergedPath)) {
+    mergedText = fs.readFileSync(mergedPath, 'utf8');
+  } else {
+    const mergedParts = [];
+    for (const section of sections) {
+      const mdPath = path.join(outputDir, `${section}.md`);
+      if (fs.existsSync(mdPath)) {
+        mergedParts.push(`# SECTION: ${section}\n\n${fs.readFileSync(mdPath, 'utf8')}\n`);
+      }
+    }
+    mergedText = mergedParts.join('\n\n');
+  }
+
+  const prompt = `You are an expert financial analyst specializing in Indian IPOs.
+Extract all available structured information from the following DRHP/RHP prospectus text.
+You must output a strictly valid JSON object matching the JSON Schema provided. Do not include any explanation or markdown formatting (e.g. no \`\`\`json blocks), just output raw JSON.
+For any fields not found in the text, return null.
+
+JSON SCHEMA:
+${JSON.stringify(IPO_DETAILS_SCHEMA)}
+
+PROSPECTUS TEXT:
+${mergedText}`;
+
+  log.info('calling DeepSeek structured extraction fallback');
+  const result = await callLlmJson(prompt, { maxTokens: 4000 });
+
+  // Save result
+  const resultPath = path.join(outputDir, 'summary_deepseek.json');
+  fs.writeFileSync(resultPath, JSON.stringify(result, null, 2), 'utf8');
+  log.info({ resultPath }, 'DeepSeek structured extraction complete');
+
+  return result;
+}
+
 // ── PDF download ─────────────────────────────────────────────────────────────
 
 /**
@@ -119,14 +183,14 @@ async function convertSections(pdfPath, outputDir, ranges, logMsg) {
  * @returns {Promise<object>} { slug, docType, pipeline, sections, result }
  */
 async function runExtraction(ipo, opts = {}) {
-  let { pipeline = 'gemini', docType = 'auto', force = false } = opts;
+  let { pipeline = 'cascade', docType = 'auto', force = false } = opts;
   const logMsg = opts.log || (() => {});
 
   // Auto-pick pipeline
-  if (pipeline === 'deepseek') {
-    pipeline = 'gemini';
-  } else if (pipeline !== 'gemini' && pipeline !== 'firecrawl' && pipeline !== 'both') {
-    pipeline = 'gemini';
+  if (!pipeline || pipeline === 'default' || pipeline === 'deepseek') {
+    pipeline = 'cascade';
+  } else if (pipeline !== 'gemini' && pipeline !== 'firecrawl' && pipeline !== 'both' && pipeline !== 'cascade') {
+    pipeline = 'cascade';
   }
 
   // Auto-pick docType based on priority: final > rhp > drhp
@@ -170,21 +234,14 @@ async function runExtraction(ipo, opts = {}) {
 
   // ── Phase 3: EXTRACT structured data ───────────────────────────────────
   const results = {};
+  let finalResult = null;
+  let extractionStatus = 'completed';
 
-  if (pipeline === 'gemini' || pipeline === 'both') {
-    logMsg('running Gemini extraction...');
-    try {
-      results.gemini = await runGeminiExtraction(outputDir, converted);
-      logMsg('Gemini extraction complete');
-    } catch (e) {
-      log.error({ err: e.message }, 'Gemini extraction failed');
-      logMsg(`Gemini extraction failed: ${e.message}`);
-      results.gemini = null;
-    }
-  }
-
-  if (pipeline === 'firecrawl' || pipeline === 'both') {
-    logMsg('running Firecrawl extraction...');
+  if (pipeline === 'cascade') {
+    logMsg('running Cascade extraction (Firecrawl with fallback)...');
+    
+    // 1. Try Firecrawl first
+    logMsg('1/3: running Firecrawl extraction...');
     try {
       const sectionResponses = await runFirecrawlExtraction(outputDir, converted, ipo.slug);
       results.firecrawl = mergeSectionResponses(sectionResponses);
@@ -194,10 +251,80 @@ async function runExtraction(ipo, opts = {}) {
       fs.writeFileSync(fcPath, JSON.stringify(results.firecrawl, null, 2), 'utf8');
       logMsg('Firecrawl extraction complete');
     } catch (e) {
-      log.error({ err: e.message }, 'Firecrawl extraction failed');
+      log.warn({ err: e.message }, 'Firecrawl extraction failed');
       logMsg(`Firecrawl extraction failed: ${e.message}`);
       results.firecrawl = null;
     }
+
+    if (isExtractionProper(results.firecrawl)) {
+      logMsg('Firecrawl extraction is proper. Completed.');
+      finalResult = results.firecrawl;
+    } else {
+      logMsg('Firecrawl result incomplete/not proper. Flagging for review and falling back...');
+      extractionStatus = 'review';
+      
+      // 2. Try Gemini fallback
+      logMsg('2/3: running Gemini extraction fallback...');
+      try {
+        results.gemini = await runGeminiExtraction(outputDir, converted);
+        logMsg('Gemini extraction complete');
+      } catch (e) {
+        log.warn({ err: e.message }, 'Gemini fallback failed');
+        logMsg(`Gemini fallback failed: ${e.message}`);
+        results.gemini = null;
+      }
+
+      if (isExtractionProper(results.gemini)) {
+        logMsg('Gemini fallback result is proper.');
+        finalResult = results.gemini;
+      } else {
+        // 3. Try DeepSeek fallback
+        logMsg('3/3: running DeepSeek extraction fallback...');
+        try {
+          results.deepseek = await runDeepSeekExtraction(outputDir, converted);
+          logMsg('DeepSeek extraction complete');
+        } catch (e) {
+          log.error({ err: e.message }, 'DeepSeek fallback failed');
+          logMsg(`DeepSeek fallback failed: ${e.message}`);
+          results.deepseek = null;
+        }
+        
+        // Use best available result
+        finalResult = results.deepseek || results.gemini || results.firecrawl || null;
+      }
+    }
+  } else {
+    // Standard pipelines
+    if (pipeline === 'gemini' || pipeline === 'both') {
+      logMsg('running Gemini extraction...');
+      try {
+        results.gemini = await runGeminiExtraction(outputDir, converted);
+        logMsg('Gemini extraction complete');
+      } catch (e) {
+        log.error({ err: e.message }, 'Gemini extraction failed');
+        logMsg(`Gemini extraction failed: ${e.message}`);
+        results.gemini = null;
+      }
+    }
+
+    if (pipeline === 'firecrawl' || pipeline === 'both') {
+      logMsg('running Firecrawl extraction...');
+      try {
+        const sectionResponses = await runFirecrawlExtraction(outputDir, converted, ipo.slug);
+        results.firecrawl = mergeSectionResponses(sectionResponses);
+
+        // Save merged result
+        const fcPath = path.join(outputDir, 'summary_firecrawl.json');
+        fs.writeFileSync(fcPath, JSON.stringify(results.firecrawl, null, 2), 'utf8');
+        logMsg('Firecrawl extraction complete');
+      } catch (e) {
+        log.error({ err: e.message }, 'Firecrawl extraction failed');
+        logMsg(`Firecrawl extraction failed: ${e.message}`);
+        results.firecrawl = null;
+      }
+    }
+
+    finalResult = pipeline === 'both' ? results : (results[pipeline] || null);
   }
 
   // ── Save to MongoDB ────────────────────────────────────────────────────
@@ -207,9 +334,9 @@ async function runExtraction(ipo, opts = {}) {
     pipeline,
     pdfUrl,
     sections: ranges,
-    result: pipeline === 'both' ? results : (results[pipeline] || null),
+    result: finalResult,
     usage: getUsage(),
-    status: 'completed',
+    status: extractionStatus,
     extractedAt: new Date().toISOString(),
   };
 
@@ -240,7 +367,7 @@ async function runExtraction(ipo, opts = {}) {
     sections: Object.fromEntries(
       Object.entries(ranges).map(([k, v]) => [k, v.method]),
     ),
-    result: extractionDoc.result,
+    result: finalResult,
     usage: getUsage(),
   };
 }
@@ -256,14 +383,14 @@ async function runExtraction(ipo, opts = {}) {
  * @returns {Promise<object>} { total, extracted, skipped, errors }
  */
 async function runBulkExtraction(opts = {}) {
-  let { pipeline = 'gemini', docType = 'auto', status } = opts;
+  let { pipeline = 'cascade', docType = 'auto', status } = opts;
   const logMsg = opts.log || (() => {});
 
   // Auto-pick pipeline
-  if (pipeline === 'deepseek') {
-    pipeline = 'gemini';
-  } else if (pipeline !== 'gemini' && pipeline !== 'firecrawl' && pipeline !== 'both') {
-    pipeline = 'gemini';
+  if (!pipeline || pipeline === 'default' || pipeline === 'deepseek') {
+    pipeline = 'cascade';
+  } else if (pipeline !== 'gemini' && pipeline !== 'firecrawl' && pipeline !== 'both' && pipeline !== 'cascade') {
+    pipeline = 'cascade';
   }
 
   const filter = {};
@@ -297,7 +424,8 @@ async function runBulkExtraction(opts = {}) {
       // Skip if already extracted (unless force)
       if (!opts.force) {
         const existing = await collections.extractions().findOne({
-          ipoSlug: ipo.slug, docType: targetDocType, pipeline, status: 'completed',
+          ipoSlug: ipo.slug, docType: targetDocType, pipeline,
+          status: { $in: ['completed', 'review'] },
         });
         if (existing) {
           summary.skipped++;
