@@ -19,7 +19,7 @@ COPY --from=python-deps /build/.venv /app/src/extraction/python/.venv
 
 # Install Node dependencies (production only)
 COPY package.json package-lock.json ./
-RUN npm ci --omit=dev
+RUN npm install --omit=dev --no-audit --no-fund
 
 # Copy application source
 COPY . .

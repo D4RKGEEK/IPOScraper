@@ -12,6 +12,7 @@ const path = require('path');
 const { markdownToHtml, wrapInStyledHtml } = require('../convert/md-to-html');
 const { IPO_DETAILS_SCHEMA } = require('../llm/schema');
 const { generateCacheKey, getCachedResponse, setCachedResponse } = require('../cache');
+const { recordFirecrawlUsage } = require('../usage');
 const { env } = require('../config');
 const { logger } = require('../../utils/logger');
 
@@ -86,6 +87,11 @@ async function firecrawlParse(htmlPath, section, ipoSlug) {
 
   const responseData = await res.json();
   const extracted = responseData?.data?.json || {};
+
+  // Track Firecrawl credits used
+  if (typeof responseData.creditsUsed === 'number') {
+    recordFirecrawlUsage(responseData.creditsUsed);
+  }
 
   // Cache the result
   setCachedResponse(cacheKey, extracted);

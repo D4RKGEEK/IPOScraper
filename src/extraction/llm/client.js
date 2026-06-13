@@ -13,6 +13,7 @@
 
 const { env } = require('../config');
 const { generateCacheKey, getCachedResponse, setCachedResponse } = require('../cache');
+const { recordGeminiUsage, recordDeepSeekUsage } = require('../usage');
 const { logger } = require('../../utils/logger');
 
 const log = logger.child({ module: 'extraction:llm' });
@@ -43,6 +44,7 @@ async function callDeepSeek(prompt, maxTokens = 2000) {
   const data = await res.json();
   const text = data.choices?.[0]?.message?.content;
   if (!text) throw new Error('DeepSeek returned empty content');
+  recordDeepSeekUsage(data.usage);
   return JSON.parse(text);
 }
 
@@ -70,6 +72,7 @@ async function callGeminiFreeform(prompt, maxTokens = 2000) {
   });
   const text = response.text;
   if (!text) throw new Error('Gemini returned empty content');
+  recordGeminiUsage(response.usageMetadata);
   return JSON.parse(text);
 }
 
@@ -157,6 +160,7 @@ async function callGeminiStructured(prompt, responseSchema, opts = {}) {
   const text = response.text;
   if (!text) throw new Error('Gemini structured returned empty content');
   const result = JSON.parse(text);
+  recordGeminiUsage(response.usageMetadata);
 
   if (cache) {
     const key = generateCacheKey('gemini_structured', prompt);

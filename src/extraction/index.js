@@ -21,6 +21,7 @@ const { runGeminiExtraction } = require('./extract/gemini');
 const { runFirecrawlExtraction } = require('./extract/firecrawl');
 const { mergeSectionResponses } = require('./extract/merge');
 const { env } = require('./config');
+const { resetUsage, getUsage } = require('./usage');
 const { collections } = require('../db/mongo');
 const { findBySlug } = require('../db/ipoRepository');
 const { logger } = require('../utils/logger');
@@ -118,8 +119,30 @@ async function convertSections(pdfPath, outputDir, ranges, logMsg) {
  * @returns {Promise<object>} { slug, docType, pipeline, sections, result }
  */
 async function runExtraction(ipo, opts = {}) {
-  const { pipeline = 'gemini', docType = 'drhp', force = false } = opts;
+  let { pipeline = 'gemini', docType = 'auto', force = false } = opts;
   const logMsg = opts.log || (() => {});
+
+  // Auto-pick pipeline
+  if (pipeline === 'deepseek') {
+    pipeline = 'gemini';
+  } else if (pipeline !== 'gemini' && pipeline !== 'firecrawl' && pipeline !== 'both') {
+    pipeline = 'gemini';
+  }
+
+  // Auto-pick docType based on priority: final > rhp > drhp
+  if (!docType || docType === 'auto') {
+    if (ipo.documents?.final?.url) {
+      docType = 'final';
+    } else if (ipo.documents?.rhp?.url) {
+      docType = 'rhp';
+    } else if (ipo.documents?.drhp?.url) {
+      docType = 'drhp';
+    } else {
+      throw new Error(`No documents (final, rhp, or drhp) found for IPO ${ipo.slug}`);
+    }
+  }
+
+  resetUsage();
 
   const pdfUrl = ipo.documents?.[docType]?.url;
   if (!pdfUrl) throw new Error(`No ${docType} URL found for IPO ${ipo.slug}`);
@@ -185,6 +208,7 @@ async function runExtraction(ipo, opts = {}) {
     pdfUrl,
     sections: ranges,
     result: pipeline === 'both' ? results : (results[pipeline] || null),
+    usage: getUsage(),
     status: 'completed',
     extractedAt: new Date().toISOString(),
   };
@@ -217,6 +241,7 @@ async function runExtraction(ipo, opts = {}) {
       Object.entries(ranges).map(([k, v]) => [k, v.method]),
     ),
     result: extractionDoc.result,
+    usage: getUsage(),
   };
 }
 
@@ -231,34 +256,58 @@ async function runExtraction(ipo, opts = {}) {
  * @returns {Promise<object>} { total, extracted, skipped, errors }
  */
 async function runBulkExtraction(opts = {}) {
-  const { pipeline = 'gemini', docType = 'drhp', status } = opts;
+  let { pipeline = 'gemini', docType = 'auto', status } = opts;
   const logMsg = opts.log || (() => {});
+
+  // Auto-pick pipeline
+  if (pipeline === 'deepseek') {
+    pipeline = 'gemini';
+  } else if (pipeline !== 'gemini' && pipeline !== 'firecrawl' && pipeline !== 'both') {
+    pipeline = 'gemini';
+  }
 
   const filter = {};
   if (status) filter.status = status;
-  filter[`documents.${docType}.url`] = { $exists: true, $ne: null };
+
+  if (!docType || docType === 'auto') {
+    filter.$or = [
+      { 'documents.final.url': { $exists: true, $ne: null } },
+      { 'documents.rhp.url': { $exists: true, $ne: null } },
+      { 'documents.drhp.url': { $exists: true, $ne: null } }
+    ];
+  } else {
+    filter[`documents.${docType}.url`] = { $exists: true, $ne: null };
+  }
 
   const ipos = await collections.ipos().find(filter).toArray();
-  logMsg(`found ${ipos.length} IPOs with ${docType} documents`);
+  logMsg(`found ${ipos.length} IPOs with documents matching filter`);
 
   const summary = { total: ipos.length, extracted: 0, skipped: 0, errors: [] };
 
   for (const ipo of ipos) {
     try {
+      // Determine what resolved docType will be for this specific IPO
+      let targetDocType = docType;
+      if (targetDocType === 'auto' || !targetDocType) {
+        if (ipo.documents?.final?.url) targetDocType = 'final';
+        else if (ipo.documents?.rhp?.url) targetDocType = 'rhp';
+        else if (ipo.documents?.drhp?.url) targetDocType = 'drhp';
+      }
+
       // Skip if already extracted (unless force)
       if (!opts.force) {
         const existing = await collections.extractions().findOne({
-          ipoSlug: ipo.slug, docType, pipeline, status: 'completed',
+          ipoSlug: ipo.slug, docType: targetDocType, pipeline, status: 'completed',
         });
         if (existing) {
           summary.skipped++;
-          logMsg(`skipping ${ipo.slug} (already extracted)`);
+          logMsg(`skipping ${ipo.slug} (already extracted for docType=${targetDocType})`);
           continue;
         }
       }
 
-      logMsg(`\n── extracting ${ipo.slug} ──`);
-      await runExtraction(ipo, { pipeline, docType, force: opts.force, log: logMsg });
+      logMsg(`\n── extracting ${ipo.slug} (docType=${targetDocType}) ──`);
+      await runExtraction(ipo, { pipeline, docType: targetDocType, force: opts.force, log: logMsg });
       summary.extracted++;
     } catch (e) {
       summary.errors.push({ slug: ipo.slug, error: e.message });
@@ -267,7 +316,7 @@ async function runBulkExtraction(opts = {}) {
   }
 
   logMsg(`\nbulk extraction done: ${summary.extracted} extracted, ${summary.skipped} skipped, ${summary.errors.length} errors`);
-  return summary;
+  return { ...summary, usage: getUsage() };
 }
 
 module.exports = { runExtraction, runBulkExtraction };

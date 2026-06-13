@@ -173,9 +173,32 @@ function buildApp(opts = {}) {
   app.post('/ipos/:slug/extract', asyncH(async (req, res) => {
     const ipo = await findBySlug(req.params.slug);
     if (!ipo) return res.status(404).json({ error: 'IPO not found', slug: req.params.slug });
-    const { pipeline = 'gemini', docType = 'drhp', force = false, wait = false } = req.body || {};
-    const docUrl = ipo.documents?.[docType]?.url;
-    if (!docUrl) return res.status(400).json({ error: `No ${docType} URL found for this IPO` });
+    
+    let { pipeline = 'gemini', docType = 'auto', force = false, wait = false } = req.body || {};
+    
+    // Auto-pick pipeline
+    if (pipeline === 'deepseek') {
+      pipeline = 'gemini';
+    } else if (pipeline !== 'gemini' && pipeline !== 'firecrawl' && pipeline !== 'both') {
+      pipeline = 'gemini';
+    }
+
+    // Auto-pick docType based on priority: final > rhp > drhp
+    if (docType === 'auto' || !docType) {
+      if (ipo.documents?.final?.url) {
+        docType = 'final';
+      } else if (ipo.documents?.rhp?.url) {
+        docType = 'rhp';
+      } else if (ipo.documents?.drhp?.url) {
+        docType = 'drhp';
+      } else {
+        return res.status(400).json({ error: 'No documents (final, rhp, or drhp) found for this IPO' });
+      }
+    } else {
+      const docUrl = ipo.documents?.[docType]?.url;
+      if (!docUrl) return res.status(400).json({ error: `No ${docType} URL found for this IPO` });
+    }
+
     await runTracked(res,
       { type: 'extraction', params: { slug: ipo.slug, docType, pipeline }, longOp: true, wait },
       (log) => runExtraction(ipo, { pipeline, docType, force, log }));
@@ -183,7 +206,15 @@ function buildApp(opts = {}) {
 
   // POST /ipos/extract — bulk extract all IPOs that have documents
   app.post('/ipos/extract', asyncH(async (req, res) => {
-    const { pipeline = 'gemini', docType = 'drhp', status, force = false, wait = false } = req.body || {};
+    let { pipeline = 'gemini', docType = 'auto', status, force = false, wait = false } = req.body || {};
+    
+    // Auto-pick pipeline
+    if (pipeline === 'deepseek') {
+      pipeline = 'gemini';
+    } else if (pipeline !== 'gemini' && pipeline !== 'firecrawl' && pipeline !== 'both') {
+      pipeline = 'gemini';
+    }
+
     await runTracked(res,
       { type: 'extraction-bulk', params: { pipeline, docType, status }, longOp: true, wait },
       (log) => runBulkExtraction({ pipeline, docType, status, force, log }));
