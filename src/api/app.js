@@ -679,6 +679,27 @@ function buildApp(opts = {}) {
     res.json(job);
   }));
 
+  // GET /jobs/:id/stream — Server-Sent Events: push the job (status + logs) until
+  // it finishes, then close. The dashboard's EventSource uses ?token= (auth via
+  // query, since EventSource can't set headers). Replaces client-side polling.
+  app.get('/jobs/:id/stream', (req, res) => {
+    res.set({ 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive', 'X-Accel-Buffering': 'no' });
+    if (res.flushHeaders) res.flushHeaders();
+    let closed = false;
+    req.on('close', () => { closed = true; });
+    const tick = async () => {
+      if (closed) return;
+      try {
+        const job = await getJob(req.params.id);
+        if (!job) { res.write(`event: error\ndata: ${JSON.stringify({ error: 'not found' })}\n\n`); return res.end(); }
+        res.write(`data: ${JSON.stringify(job)}\n\n`);
+        if (job.status !== 'running') return res.end();
+      } catch (e) { /* transient — retry on next tick */ }
+      setTimeout(tick, 1500);
+    };
+    tick();
+  });
+
   // ── PDF Lab — interactive inspection tools ────────────────────────────────
 
   // GET /pdf/:slug?docType=auto — stream the IPO's PDF (so the dashboard can

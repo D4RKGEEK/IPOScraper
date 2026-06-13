@@ -60,35 +60,41 @@ All in `src/api/public/dashboard.html` (single Alpine.js app).
   count, and a clickable "lowest scoring" list (from `/stats` `extractions.quality`).
   *(covers Dashboard #5)*
 
-## Phase 3 — Schema "test on an IPO" ⬜  *(Extraction #6)*
+## Phase 3 — Schema "test on an IPO" ✅  *(Extraction #6)*
 
-- `POST /schema/test` body `{ slug, docType, fields, pipeline }` → run extraction with the
-  **edited, unsaved** schema against a real IPO, return result + validation, persist nothing.
-- Reuse already-downloaded/converted markdown when present (skip download/locate/convert).
-- Safe global `FIELDS` swap via a `withFields(temp, fn)` helper; relies on the heavy-lane
+- `POST /schema/test` body `{ slug, fields, docType?, pipeline?, wait? }` → runs one engine with
+  the **edited, unsaved** schema against a real IPO, returns result + validation, persists nothing.
+  Tracked heavy-lane job. `testSchemaOnIpo()` in `extraction/index.js`.
+- Reuses cached R2 markdown when present (skips download/locate/convert); else one-off convert.
+- Safe global `FIELDS` swap via `withFields(temp, fn)` in `llm/schema.js`; relies on the heavy-lane
   concurrency=1 guard so no concurrent run sees the temp schema.
-- Dashboard: "Test on IPO" action in the schema editor → inline result preview.
+- Dashboard: "Test on IPO" button in the schema editor → IPO picker → inline result + score preview.
 
-## Phase 4 — Failure transparency ⬜  *(Extraction #5)*
+## Phase 4 — Failure transparency ✅  *(Extraction #5)*
 
-- Track `failedPhase` (download/locate/convert/extract) and per-engine outcome.
-- On failure, persist a partial extraction doc (`status:'failed'`, `error`, `failedPhase`,
-  any partial result) instead of nothing.
-- Surface in job view + extraction view ("Failed at convert; Gemini ok, Firecrawl network error").
+- `runExtraction` tracks `phase` (download/locate/convert/extract/save) + per-engine `engineErrors`.
+- On a crash: persists a `failed` extraction doc (`error`, `failedPhase`, `partial`) WITHOUT
+  clobbering a prior good result (annotates `lastError`/`lastFailedPhase` instead).
+- Surfaced: "Failed" filter + failedPhase on the status badge in the review table; a failure panel
+  in the extraction modal (failed phase, error, per-engine errors, partial sections converted).
 
-## Phase 5 — Cross-pipeline compare + golden + eval ⬜  *(Extraction #4, #3)*
+## Phase 5 — Cross-pipeline compare + golden + eval ✅  *(Extraction #4, #3)*
 
-- `POST /ipos/:slug/compare` → align gemini/firecrawl/deepseek results field-by-field,
-  highlight disagreements; "use this value" composes a corrected result.
-- Approve flow: human-verified result → snapshot to `golden_extractions` (ground truth).
-- `POST /eval/run` → re-extract golden IPOs, field-level diff vs golden, accuracy report +
-  regressions; stored in `eval_runs`; Eval dashboard page.
+- `GET /extractions/:slug/compare` → aligns stored pipeline rows field-by-field (no LLM),
+  disagreements first. `compareResults()` in `extraction/eval.js`. Compare modal in the UI.
+- Golden set: `POST /extractions/:slug/golden` snapshots a verified result to `golden_extractions`;
+  `GET /golden`, `DELETE /golden/:slug`. "★ Golden" button in the extraction modal.
+- `POST /eval/run` → re-extracts every golden with the current schema, field-level diff vs golden
+  (`diffResult()`), stores accuracy report in `eval_runs`. New **Eval** nav page (run, runs list,
+  run detail, golden set). Tests in `test/extraction/eval.test.js`.
 
-## Phase 6 — Dashboard polish ⬜
+## Phase 6 — Dashboard polish ✅
 
-- PDF side-by-side review (PDF iframe + editable fields, jump to located section pages).
-- Bulk operations UI (select N IPOs → bulk extract / validate / re-validate).
-- Live job updates via SSE (`GET /jobs/:id/stream`) instead of polling.
+- PDF side-by-side review: "PDF" toggle in the extraction modal splits the view (source PDF iframe
+  beside the fields), widens the modal.
+- Bulk operations UI: row + select-all checkboxes on the IPO list → bulk-extract bar.
+- Live job updates via SSE: `GET /jobs/:id/stream` (auth via `?token=`); dashboard `streamJob()`
+  uses EventSource for the active job instead of polling.
 
 ## Deferred (by user)
 

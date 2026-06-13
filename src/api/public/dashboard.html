@@ -291,15 +291,23 @@
           <select x-model="ipoFilters.sort" @change="loadIpos(1)" class="bg-background border rounded-md px-2 py-2 text-sm"><option value="latest">Latest</option><option value="listingDate">Listing date</option><option value="name">Name</option></select>
         </div>
 
+        <div x-show="selectedSlugs().length" class="rounded-xl border bg-accent/40 px-4 py-2.5 flex items-center gap-3 text-sm">
+          <span class="font-medium" x-text="selectedSlugs().length+' selected'"></span>
+          <button @click="bulkExtract()" class="px-3 py-1.5 rounded-md bg-primary text-primary-foreground text-xs font-medium hover:opacity-90">Extract selected</button>
+          <button @click="clearSelection()" class="px-3 py-1.5 rounded-md border bg-card text-xs hover:bg-accent">Clear</button>
+        </div>
+
         <div class="rounded-xl border bg-card overflow-hidden">
           <table class="w-full text-sm">
             <thead><tr class="text-left text-muted-foreground border-b text-xs uppercase tracking-wide">
-              <th class="font-medium py-2.5 px-4">Company</th><th class="font-medium">Status</th><th class="font-medium">Type</th><th class="font-medium">Price band</th><th class="font-medium">Docs</th><th></th>
+              <th class="py-2.5 pl-4 w-8"><input type="checkbox" :checked="ipos.length && ipos.every(i=>ipoSelected[i.slug])" @change="toggleSelectAll()" class="accent-primary"></th>
+              <th class="font-medium py-2.5 px-2">Company</th><th class="font-medium">Status</th><th class="font-medium">Type</th><th class="font-medium">Price band</th><th class="font-medium">Docs</th><th></th>
             </tr></thead>
             <tbody>
               <template x-for="ipo in ipos" :key="ipo.slug">
-                <tr class="border-b last:border-0 hover:bg-accent/40 transition">
-                  <td class="py-2.5 px-4">
+                <tr class="border-b last:border-0 hover:bg-accent/40 transition" :class="ipoSelected[ipo.slug]?'bg-accent/30':''">
+                  <td class="pl-4"><input type="checkbox" :checked="!!ipoSelected[ipo.slug]" @change="toggleSelect(ipo.slug)" class="accent-primary"></td>
+                  <td class="py-2.5 px-2">
                     <button @click="openIpo(ipo.slug)" class="font-medium hover:underline text-left" x-text="ipo.companyName || ipo.slug"></button>
                     <div class="text-xs text-muted-foreground" x-text="ipo.symbol || ipo.isin || ''"></div>
                   </td>
@@ -310,7 +318,7 @@
                   <td class="text-right pr-4"><button @click="openExtractForm(ipo)" class="text-xs px-2.5 py-1 rounded-md bg-primary text-primary-foreground hover:opacity-90">Extract</button></td>
                 </tr>
               </template>
-              <tr x-show="!ipos.length"><td colspan="6" class="text-center text-muted-foreground py-10">No IPOs match.</td></tr>
+              <tr x-show="!ipos.length"><td colspan="7" class="text-center text-muted-foreground py-10">No IPOs match.</td></tr>
             </tbody>
           </table>
         </div>
@@ -1139,8 +1147,8 @@
   </div>
 
   <!-- ════════════ EXTRACTION VIEWER/EDITOR ════════════ -->
-  <div x-show="exView" x-transition.opacity class="fixed inset-0 bg-black/60 z-40 flex justify-center items-start overflow-auto py-8" @click.self="exView=null">
-    <div class="bg-card rounded-xl border shadow-xl w-full max-w-4xl">
+  <div x-show="exView" x-transition.opacity class="fixed inset-0 bg-black/60 z-40 flex justify-center items-start overflow-auto py-8 px-4" @click.self="exView=null">
+    <div class="bg-card rounded-xl border shadow-xl w-full" :class="exShowPdf?'max-w-7xl':'max-w-4xl'">
       <template x-if="exView"><div>
         <div class="flex justify-between items-center p-4 border-b sticky top-0 bg-card z-10 rounded-t-xl">
           <div><h3 class="font-semibold" x-text="exView.result?.company_name||exView.ipoSlug"></h3>
@@ -1150,6 +1158,7 @@
             <button @click="revalidate()" class="px-3 py-1.5 rounded-md border bg-card text-sm" title="Re-score against current rules (no LLM)">Re-validate</button>
             <button @click="openCompare()" class="px-3 py-1.5 rounded-md border bg-card text-sm" title="Compare pipelines field-by-field">Compare</button>
             <button @click="markGolden()" class="px-3 py-1.5 rounded-md border bg-card text-sm" title="Save this result as verified ground truth for eval">★ Golden</button>
+            <button @click="exShowPdf=!exShowPdf" class="px-3 py-1.5 rounded-md border bg-card text-sm" :class="exShowPdf?'bg-accent':''" title="Show the source PDF beside the fields">PDF</button>
             <button @click="editing=!editing" class="px-3 py-1.5 rounded-md border bg-card text-sm" x-text="editing?'View':'Edit'"></button>
             <button x-show="editing" @click="saveExtraction()" class="px-3 py-1.5 rounded-md bg-emerald-600 text-white text-sm">Save</button>
             <button x-show="exView.status==='review'" @click="resolveReview()" class="px-3 py-1.5 rounded-md bg-amber-500 text-white text-sm">Mark reviewed</button>
@@ -1187,7 +1196,11 @@
           <span class="text-muted-foreground uppercase">located:</span>
           <template x-for="[sec,info] in Object.entries(exView.sections||{})" :key="sec"><span class="px-1.5 py-0.5 rounded" :class="info.range?'bg-emerald-500/10 text-emerald-500':'bg-rose-500/10 text-rose-500'" x-text="sec.toLowerCase()+' '+(info.method||'')"></span></template>
         </div>
-        <div class="p-4 max-h-[60vh] overflow-auto scroll-thin space-y-1">
+        <div :class="exShowPdf?'grid lg:grid-cols-2 gap-0':''">
+        <div x-show="exShowPdf" class="border-r hidden lg:block">
+          <iframe :src="exPdfUrl()" class="w-full h-[70vh] bg-white"></iframe>
+        </div>
+        <div class="p-4 max-h-[70vh] overflow-auto scroll-thin space-y-1">
           <template x-for="key in schemaKeys" :key="key">
             <div class="grid grid-cols-3 gap-3 py-1.5 border-b border-border/50 items-start">
               <div class="text-xs"><div class="font-medium" x-text="key"></div><div class="text-muted-foreground" x-text="schema[key]?.type"></div></div>
@@ -1211,6 +1224,7 @@
               </div>
             </div>
           </template>
+        </div>
         </div>
       </div></template>
     </div>
@@ -1287,7 +1301,8 @@ function app() {
     ipos: [], pagination:{page:1,total:0,hasMore:false}, ipoFilters:{search:'',status:'',document:'',sort:'latest'}, ipoDetail:null,
     extractForm: null,
     schema:{}, schemaKeys:[], defaultValue:'[-]',
-    extractions:[], exFilter:'review', exView:null, editing:false, editResult:{}, editResultText:{},
+    extractions:[], exFilter:'review', exView:null, editing:false, editResult:{}, editResultText:{}, exShowPdf:false,
+    ipoSelected:{},
     jobs:[], jobFilters:{type:'',status:''}, jobAutoRefresh:false, activeJob:null,
     logSearch:'', logWrap:false, logFollow:true,
     scrapeForm:{sources:['upstox','nse','groww','zerodha'],dryRun:false},
@@ -1511,8 +1526,11 @@ function app() {
 
     // ── jobs ──
     async loadJobs(){ const qs=new URLSearchParams(); if(this.jobFilters.type)qs.set('type',this.jobFilters.type); if(this.jobFilters.status)qs.set('status',this.jobFilters.status); try{ this.jobs=(await this.api('/jobs?'+qs)).jobs; }catch(e){} },
-    async openJob(id){ try{ const sameJob=this.activeJob?.jobId===id; this.activeJob=await this.api('/jobs/'+id); if(!sameJob){ this.logSearch=''; this.logFollow=true; this.$nextTick(()=>{ if(this.$refs.jobLog) this.$refs.jobLog.scrollTop=this.$refs.jobLog.scrollHeight; }); } }catch(e){ this.notify(e.message,true); } },
-    async tickJobs(){ await this.loadJobs(); if(this.activeJob&&this.activeJob.status==='running') await this.openJob(this.activeJob.jobId); },
+    async openJob(id){ try{ const sameJob=this.activeJob?.jobId===id; this.activeJob=await this.api('/jobs/'+id); if(!sameJob){ this.logSearch=''; this.logFollow=true; this.$nextTick(()=>{ if(this.$refs.jobLog) this.$refs.jobLog.scrollTop=this.$refs.jobLog.scrollHeight; }); } this.streamJob(id); }catch(e){ this.notify(e.message,true); } },
+    // Live job updates over Server-Sent Events (no client polling). EventSource
+    // can't set headers, so auth rides on ?token=. Closes when the job finishes.
+    streamJob(id){ if(this._es){ this._es.close(); this._es=null; } if(typeof EventSource==='undefined') return; if(this.activeJob && this.activeJob.status!=='running') return; try{ const url='/jobs/'+id+'/stream'+(this.token?('?token='+encodeURIComponent(this.token)):''); const es=new EventSource(url); this._es=es; es.onmessage=(e)=>{ try{ const j=JSON.parse(e.data); if(this.activeJob?.jobId===j.jobId || this.activeJob?.jobId===id){ this.activeJob=j; if(this.logFollow) this.$nextTick(()=>{ if(this.$refs.jobLog) this.$refs.jobLog.scrollTop=this.$refs.jobLog.scrollHeight; }); } if(j.status!=='running'){ es.close(); this._es=null; this.loadJobs(); } }catch(err){} }; es.onerror=()=>{ es.close(); this._es=null; }; }catch(e){} },
+    async tickJobs(){ await this.loadJobs(); },
 
     // ── control ──
     async post(path,body,label){ try{ const r=await this.api(path,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)}); this.notify(label+' started'); this.page='jobs'; this.loadJobs(); if(r.jobId) this.openJob(r.jobId); }catch(e){ this.notify(e.message,true); } },
@@ -1566,6 +1584,14 @@ function app() {
     labPick(r){ this.lab.slug=r.slug; this.lab.companyName=r.companyName||r.slug; this.lab.search=this.lab.companyName; this.lab.results=[]; this.lab.job=null; this.lab.kind=''; },
     labClear(){ this.lab.slug=''; this.lab.search=''; this.lab.companyName=''; this.lab.job=null; },
     labPdfUrl(){ return '/pdf/'+this.lab.slug+'?docType='+this.lab.docType+(this.token?('&token='+encodeURIComponent(this.token)):''); },
+    exPdfUrl(){ if(!this.exView) return 'about:blank'; return '/pdf/'+this.exView.ipoSlug+'?docType='+(this.exView.docType||'auto')+(this.token?('&token='+encodeURIComponent(this.token)):''); },
+
+    // ── BULK OPS (IPO list selection) ──
+    toggleSelect(slug){ if(this.ipoSelected[slug]) delete this.ipoSelected[slug]; else this.ipoSelected[slug]=true; },
+    selectedSlugs(){ return Object.keys(this.ipoSelected); },
+    toggleSelectAll(){ const all=this.ipos.every(i=>this.ipoSelected[i.slug]); this.ipoSelected={}; if(!all) for(const i of this.ipos) this.ipoSelected[i.slug]=true; },
+    clearSelection(){ this.ipoSelected={}; },
+    async bulkExtract(){ const slugs=this.selectedSlugs(); if(!slugs.length) return; if(!confirm('Queue extraction for '+slugs.length+' IPO(s)?')) return; let n=0; for(const slug of slugs){ try{ await this.api('/ipos/'+slug+'/extract',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({pipeline:'cascade',docType:'auto'})}); n++; }catch(e){} } this.notify('Queued '+n+'/'+slugs.length+' extraction(s)'); this.clearSelection(); this.page='jobs'; this.loadJobs(); },
     async runTool(path,extra,kind){ if(!this.lab.slug){ this.notify('pick an IPO first',true); return; } this.lab.kind=kind; try{ const r=await this.api(path,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({slug:this.lab.slug,docType:this.lab.docType,...extra})}); this.lab.job={jobId:r.jobId,status:'running',logs:[]}; this.pollLab(r.jobId); }catch(e){ this.notify(e.message,true); } },
     pollLab(id){ clearTimeout(this.lab._poll); const step=async()=>{ try{ const j=await this.api('/jobs/'+id); this.lab.job=j; if(j.status==='running'){ this.lab._poll=setTimeout(step,2000); } else if(j.status==='failed'){ this.notify('Tool failed: '+j.error,true); } }catch(e){} }; step(); },
     async applyProposed(key,def){ try{ const r=await this.api('/schema/field',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({key,definition:def})}); this.schema=r.fields; this.schemaKeys=Object.keys(r.fields); this.schemaDraft=JSON.parse(JSON.stringify(r.fields)); this.notify('Added "'+key+'" to schema'); }catch(e){ this.notify(e.message,true); } },
