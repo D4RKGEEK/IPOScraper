@@ -243,7 +243,7 @@ async function runExtraction(ipo, opts = {}) {
     // 1. Try Firecrawl first
     logMsg('1/3: running Firecrawl extraction...');
     try {
-      const sectionResponses = await runFirecrawlExtraction(outputDir, converted, ipo.slug);
+      const sectionResponses = await runFirecrawlExtraction(outputDir, converted, ipo.slug, logMsg);
       results.firecrawl = mergeSectionResponses(sectionResponses);
 
       // Save merged result
@@ -310,7 +310,7 @@ async function runExtraction(ipo, opts = {}) {
     if (pipeline === 'firecrawl' || pipeline === 'both') {
       logMsg('running Firecrawl extraction...');
       try {
-        const sectionResponses = await runFirecrawlExtraction(outputDir, converted, ipo.slug);
+        const sectionResponses = await runFirecrawlExtraction(outputDir, converted, ipo.slug, logMsg);
         results.firecrawl = mergeSectionResponses(sectionResponses);
 
         // Save merged result
