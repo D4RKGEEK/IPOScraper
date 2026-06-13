@@ -17,6 +17,7 @@ const schemaStore = require('../extraction/llm/schema');
 const sectionConfig = require('../extraction/config');
 const validationStore = require('../extraction/validate');
 const { aiEditSchema, aiEditValidation } = require('../extraction/ai-edit');
+const { compareResults, runEval } = require('../extraction/eval');
 const configRepo = require('../db/configRepository');
 const tools = require('../extraction/tools');
 const { createJob, appendLog, completeJob, failJob, getJob, listJobs } = require('../db/jobRepository');
@@ -585,6 +586,76 @@ function buildApp(opts = {}) {
     // Re-scoring can flip statuses → refresh the IPO's current-extraction pointer.
     await reconcileExtractions(req.params.slug);
     res.json({ slug: req.params.slug, scored });
+  }));
+
+  // GET /extractions/:slug/compare — align stored extraction rows field-by-field
+  // across pipelines (no LLM), disagreements first. Query: ?docType= narrows it.
+  app.get('/extractions/:slug/compare', asyncH(async (req, res) => {
+    const filter = { ipoSlug: req.params.slug };
+    if (req.query.docType) filter.docType = req.query.docType;
+    const rows = await collections.extractions().find(filter).toArray();
+    if (!rows.length) return res.status(404).json({ error: 'No extractions', slug: req.params.slug });
+    res.json({ slug: req.params.slug, ...compareResults(rows, schemaStore.getFields()) });
+  }));
+
+  // ── Golden set (verified ground truth for regression eval) ─────────────────
+
+  // POST /extractions/:slug/golden — snapshot a verified result as ground truth.
+  // Body: { docType, pipeline }. Keyed by (slug, docType): one golden per document.
+  app.post('/extractions/:slug/golden', asyncH(async (req, res) => {
+    const { docType, pipeline } = req.body || {};
+    const filter = { ipoSlug: req.params.slug };
+    if (docType) filter.docType = docType;
+    if (pipeline) filter.pipeline = pipeline;
+    const ex = await collections.extractions().findOne(filter, { sort: { extractedAt: -1 } });
+    if (!ex || !ex.result) return res.status(404).json({ error: 'No extraction with a result to snapshot', slug: req.params.slug });
+    const doc = {
+      ipoSlug: ex.ipoSlug, docType: ex.docType, pipeline: ex.pipeline,
+      result: ex.result, fieldCount: Object.keys(ex.result).length,
+      capturedAt: new Date().toISOString(),
+    };
+    await collections.golden().updateOne({ ipoSlug: ex.ipoSlug, docType: ex.docType }, { $set: doc }, { upsert: true });
+    res.json({ golden: { ipoSlug: doc.ipoSlug, docType: doc.docType, fieldCount: doc.fieldCount } });
+  }));
+
+  // GET /golden — list golden records (without the full result blob).
+  app.get('/golden', asyncH(async (_req, res) => {
+    const docs = await collections.golden().find({}).sort({ capturedAt: -1 }).toArray();
+    res.json({ golden: docs.map((g) => ({ ipoSlug: g.ipoSlug, docType: g.docType, pipeline: g.pipeline, company: g.result?.company_name, fieldCount: g.fieldCount, capturedAt: g.capturedAt })) });
+  }));
+
+  // DELETE /golden/:slug — remove a golden (optionally a specific docType).
+  app.delete('/golden/:slug', asyncH(async (req, res) => {
+    const filter = { ipoSlug: req.params.slug };
+    if (req.query.docType) filter.docType = req.query.docType;
+    const r = await collections.golden().deleteMany(filter);
+    res.json({ deleted: r.deletedCount, slug: req.params.slug });
+  }));
+
+  // ── Eval (regression vs the golden set) ────────────────────────────────────
+
+  // POST /eval/run — re-extract every golden with the CURRENT schema + pipeline
+  // and score accuracy vs the golden. Heavy (one LLM call per golden) → heavy lane.
+  // Body: { pipeline?, limit?, wait? }.
+  app.post('/eval/run', asyncH(async (req, res) => {
+    const { pipeline = 'gemini', limit, wait = false } = req.body || {};
+    await runTracked(res,
+      { type: 'eval', params: { pipeline, limit }, longOp: true, wait },
+      (log) => runEval({ pipeline, limit, log }, { collections, findBySlug, testSchemaOnIpo }));
+  }));
+
+  // GET /eval/runs — recent eval runs (summary only).
+  app.get('/eval/runs', asyncH(async (_req, res) => {
+    const runs = await collections.evalRuns().find({}).sort({ createdAt: -1 }).limit(30).toArray();
+    res.json({ runs: runs.map((r) => ({ id: r._id.toString(), pipeline: r.pipeline, count: r.count, evaluated: r.evaluated, errors: r.errors, meanAccuracy: r.meanAccuracy, createdAt: r.createdAt })) });
+  }));
+
+  // GET /eval/runs/:id — one eval run with per-IPO detail.
+  app.get('/eval/runs/:id', asyncH(async (req, res) => {
+    let _id; try { _id = new (require('mongodb').ObjectId)(req.params.id); } catch { return res.status(400).json({ error: 'bad id' }); }
+    const run = await collections.evalRuns().findOne({ _id });
+    if (!run) return res.status(404).json({ error: 'run not found' });
+    res.json({ ...run, id: run._id.toString(), _id: undefined });
   }));
 
 

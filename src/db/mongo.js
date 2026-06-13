@@ -72,6 +72,12 @@ async function ensureIndexes(database) {
 
   const configBackups = database.collection('config_backups');
   await configBackups.createIndex({ key: 1, createdAt: -1 });
+
+  const golden = database.collection('golden_extractions');
+  await golden.createIndex({ ipoSlug: 1, docType: 1 }, { unique: true });
+
+  const evalRuns = database.collection('eval_runs');
+  await evalRuns.createIndex({ createdAt: -1 });
 }
 
 function getDb() {
@@ -87,6 +93,8 @@ const collections = {
   extractionCache: () => getDb().collection('extraction_cache'),
   config: () => getDb().collection('config'),
   configBackups: () => getDb().collection('config_backups'),
+  golden: () => getDb().collection('golden_extractions'),
+  evalRuns: () => getDb().collection('eval_runs'),
 };
 
 async function close() {

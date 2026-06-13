@@ -357,45 +357,206 @@
         </div>
       </section>
 
-      <!-- ═══════ JOBS ═══════ -->
-      <section x-show="page==='jobs'" class="space-y-4">
-        <div class="flex gap-2 items-center flex-wrap">
-          <select x-model="jobFilters.type" @change="loadJobs()" class="bg-card border rounded-md px-2 py-2 text-sm"><option value="">All types</option><template x-for="t in ['scrape','extraction','extraction-bulk','gmp','historical','tool-toc','tool-locate','tool-markdown','tool-text','tool-suggest-schema']" :key="t"><option :value="t" x-text="t"></option></template></select>
-          <select x-model="jobFilters.status" @change="loadJobs()" class="bg-card border rounded-md px-2 py-2 text-sm"><option value="">All status</option><option value="running">running</option><option value="completed">completed</option><option value="failed">failed</option></select>
-          <label class="text-sm flex items-center gap-1.5 text-muted-foreground"><input type="checkbox" x-model="jobAutoRefresh" class="accent-primary"> auto-refresh</label>
+      <!-- ═══════ EVAL ═══════ -->
+      <section x-show="page==='eval'" class="space-y-4">
+        <div class="rounded-xl border bg-card p-5">
+          <div class="flex items-start gap-4 flex-wrap">
+            <div class="flex-1 min-w-[240px]">
+              <h2 class="font-semibold">Regression eval</h2>
+              <p class="text-sm text-muted-foreground mt-0.5">Re-extract every <span class="font-medium">golden</span> record with the current schema and score accuracy against the verified result. Mark goldens from any extraction (★ Golden).</p>
+            </div>
+            <div class="flex gap-2 items-center">
+              <select x-model="evalState.pipeline" class="bg-background border rounded-md px-2 py-2 text-sm"><option value="gemini">gemini</option><option value="firecrawl">firecrawl</option></select>
+              <button @click="runEval()" :disabled="!evalState.goldens.length || evalState.job?.status==='running'" class="px-3 py-2 rounded-md bg-primary text-primary-foreground text-sm font-medium hover:opacity-90 disabled:opacity-50">Run eval</button>
+            </div>
+          </div>
+          <div x-show="evalState.job?.status==='running'" class="mt-3 bg-zinc-950 text-zinc-100 rounded-lg p-3 font-mono text-xs max-h-40 overflow-auto scroll-thin space-y-0.5">
+            <template x-for="(l,i) in (evalState.job?.logs||[])" :key="i"><div :class="logClass(l.msg)" x-text="l.msg"></div></template>
+            <div class="flex items-center gap-1.5 text-zinc-500"><span class="live-dot">▍</span><span>running…</span></div>
+          </div>
         </div>
+
         <div class="grid lg:grid-cols-2 gap-4">
+          <!-- runs -->
           <div class="rounded-xl border bg-card overflow-hidden self-start">
+            <div class="px-4 py-2.5 border-b text-xs uppercase tracking-wide text-muted-foreground">Eval runs</div>
             <table class="w-full text-sm">
-              <thead><tr class="text-left text-muted-foreground border-b text-xs uppercase tracking-wide"><th class="font-medium py-2.5 px-4">Type</th><th class="font-medium">Status</th><th class="font-medium">Started</th><th class="font-medium">Dur</th></tr></thead>
               <tbody>
-                <template x-for="j in jobs" :key="j.jobId">
-                  <tr @click="openJob(j.jobId)" class="border-b last:border-0 hover:bg-accent/40 cursor-pointer" :class="activeJob?.jobId===j.jobId?'bg-accent/60':''">
-                    <td class="py-2.5 px-4 font-medium" x-text="j.type"></td>
-                    <td><span class="text-[11px] px-2 py-0.5 rounded-full border" :class="jobStatusClass(j.status)" x-text="j.status"></span></td>
-                    <td class="text-xs text-muted-foreground" x-text="fmtDate(j.createdAt)"></td>
-                    <td class="text-xs text-muted-foreground" x-text="j.durationMs?Math.round(j.durationMs/1000)+'s':'—'"></td>
+                <template x-for="r in evalState.runs" :key="r.id">
+                  <tr @click="openEvalRun(r.id)" class="border-b last:border-0 hover:bg-accent/40 cursor-pointer" :class="evalState.activeRun?.id===r.id?'bg-accent/60':''">
+                    <td class="py-2.5 px-4"><span class="font-semibold" :class="accClass(r.meanAccuracy)" x-text="pct(r.meanAccuracy)"></span></td>
+                    <td class="text-xs text-muted-foreground" x-text="r.evaluated+'/'+r.count+' · '+r.pipeline"></td>
+                    <td class="text-xs text-muted-foreground" x-text="fmtDate(r.createdAt)"></td>
                   </tr>
                 </template>
-                <tr x-show="!jobs.length"><td colspan="4" class="text-center text-muted-foreground py-10">No jobs.</td></tr>
+                <tr x-show="!evalState.runs.length"><td class="text-center text-muted-foreground py-8 text-sm">No eval runs yet.</td></tr>
               </tbody>
             </table>
           </div>
-          <div x-show="activeJob" class="rounded-xl border bg-zinc-950 text-zinc-100 self-start max-h-[70vh] flex flex-col overflow-hidden">
-            <div class="flex items-center justify-between px-4 py-2.5 border-b border-zinc-800 text-zinc-400 text-xs shrink-0">
-              <span class="flex items-center gap-2">
-                <span x-show="activeJob?.status==='running'" class="spinner"></span>
-                <span x-text="activeJob ? activeJob.type+' · '+activeJob.status : ''"></span>
-              </span>
-              <span class="font-mono text-zinc-600" x-text="activeJob?.jobId"></span>
+          <!-- goldens -->
+          <div class="rounded-xl border bg-card overflow-hidden self-start">
+            <div class="px-4 py-2.5 border-b text-xs uppercase tracking-wide text-muted-foreground" x-text="'Golden set ('+evalState.goldens.length+')'"></div>
+            <table class="w-full text-sm">
+              <tbody>
+                <template x-for="g in evalState.goldens" :key="g.ipoSlug+g.docType">
+                  <tr class="border-b last:border-0 hover:bg-accent/40">
+                    <td class="py-2.5 px-4 font-medium truncate" x-text="g.company||g.ipoSlug"></td>
+                    <td class="text-xs text-muted-foreground uppercase" x-text="g.docType"></td>
+                    <td class="text-xs text-muted-foreground" x-text="g.fieldCount+' fields'"></td>
+                    <td class="text-right pr-4"><button @click="delGolden(g.ipoSlug)" class="text-muted-foreground hover:text-rose-500 text-xs">✕</button></td>
+                  </tr>
+                </template>
+                <tr x-show="!evalState.goldens.length"><td colspan="4" class="text-center text-muted-foreground py-8 text-sm">No goldens — open an extraction and click ★ Golden.</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- run detail -->
+        <div x-show="evalState.activeRun" class="rounded-xl border bg-card overflow-hidden">
+          <div class="px-4 py-2.5 border-b flex items-center justify-between">
+            <span class="text-sm font-medium">Run detail · <span :class="accClass(evalState.activeRun?.meanAccuracy)" x-text="pct(evalState.activeRun?.meanAccuracy)"></span> mean</span>
+            <button @click="evalState.activeRun=null" class="text-muted-foreground hover:text-foreground text-sm">close</button>
+          </div>
+          <table class="w-full text-sm">
+            <thead><tr class="text-left text-muted-foreground border-b text-xs uppercase tracking-wide"><th class="font-medium py-2 px-4">IPO</th><th class="font-medium">Doc</th><th class="font-medium">Accuracy</th><th class="font-medium">Exact fields</th><th class="font-medium">Score</th></tr></thead>
+            <tbody>
+              <template x-for="it in (evalState.activeRun?.items||[])" :key="it.slug+it.docType">
+                <tr class="border-b last:border-0">
+                  <td class="py-2 px-4 font-medium truncate" x-text="it.slug"></td>
+                  <td class="text-xs text-muted-foreground uppercase" x-text="it.docType"></td>
+                  <td><span x-show="!it.error" :class="accClass(it.accuracy)" class="font-medium" x-text="pct(it.accuracy)"></span><span x-show="it.error" class="text-rose-500 text-xs" x-text="it.error"></span></td>
+                  <td class="text-xs text-muted-foreground" x-text="it.total!=null?(it.matched+'/'+it.total):''"></td>
+                  <td class="text-xs text-muted-foreground" x-text="it.score!=null?it.score:''"></td>
+                </tr>
+              </template>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- ═══════ JOBS ═══════ -->
+      <section x-show="page==='jobs'" class="space-y-4">
+        <div class="flex gap-2 items-center flex-wrap">
+          <select x-model="jobFilters.type" @change="loadJobs()" class="bg-card border rounded-md px-2.5 py-2 text-sm focus:ring-2 ring-ring outline-none"><option value="">All types</option><template x-for="t in ['scrape','extraction','extraction-bulk','gmp','historical','tool-toc','tool-locate','tool-markdown','tool-text','tool-suggest-schema']" :key="t"><option :value="t" x-text="t"></option></template></select>
+          <select x-model="jobFilters.status" @change="loadJobs()" class="bg-card border rounded-md px-2.5 py-2 text-sm focus:ring-2 ring-ring outline-none"><option value="">All status</option><option value="running">running</option><option value="completed">completed</option><option value="failed">failed</option></select>
+          <button @click="loadJobs()" class="px-2.5 py-2 rounded-md border bg-card hover:bg-accent text-sm flex items-center gap-1.5" title="Refresh now"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="w-3.5 h-3.5"><path d="M21 12a9 9 0 1 1-2.64-6.36M21 3v6h-6"/></svg></button>
+          <label class="ml-auto text-sm flex items-center gap-2 select-none cursor-pointer" :class="jobAutoRefresh?'text-foreground':'text-muted-foreground'">
+            <span class="relative inline-flex h-5 w-9 rounded-full transition-colors" :class="jobAutoRefresh?'bg-primary':'bg-muted'">
+              <input type="checkbox" x-model="jobAutoRefresh" class="peer sr-only">
+              <span class="absolute top-0.5 left-0.5 h-4 w-4 rounded-full bg-card shadow transition-transform" :class="jobAutoRefresh?'translate-x-4':''"></span>
+            </span>
+            Live updates
+          </label>
+        </div>
+        <div class="grid lg:grid-cols-[minmax(0,2fr)_minmax(0,3fr)] gap-4">
+          <!-- ── job list ── -->
+          <div class="rounded-xl border bg-card overflow-hidden self-start">
+            <div class="px-4 py-2.5 border-b flex items-center justify-between">
+              <span class="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Recent jobs</span>
+              <span class="text-[11px] text-muted-foreground" x-text="jobs.length+' shown'"></span>
             </div>
-            <div x-ref="jobLog" x-effect="activeJob?.logs?.length; $nextTick(()=>$refs.jobLog && ($refs.jobLog.scrollTop=$refs.jobLog.scrollHeight))" class="flex-1 overflow-auto scroll-thin p-4 font-mono text-xs space-y-0.5">
-              <template x-for="(l,i) in (activeJob?.logs||[])" :key="i"><div class="flex gap-2"><span class="text-zinc-600 shrink-0" x-text="(l.at||'').slice(11,19)"></span> <span :class="logClass(l.msg)" x-text="l.msg"></span></div></template>
-              <div x-show="activeJob?.status==='running'" class="flex items-center gap-1.5 text-zinc-500 pt-1"><span class="live-dot">▍</span><span>running…</span></div>
-              <div x-show="!(activeJob?.logs||[]).length && activeJob?.status!=='running'" class="text-zinc-600">No logs.</div>
-              <div x-show="activeJob?.error" class="text-rose-400 mt-2" x-text="'ERROR: '+(activeJob?.error||'')"></div>
-              <div x-show="activeJob?.result" class="text-emerald-400 mt-2 whitespace-pre-wrap" x-text="JSON.stringify(activeJob?.result,null,2)"></div>
+            <div class="max-h-[72vh] overflow-auto scroll-thin divide-y">
+              <template x-for="j in jobs" :key="j.jobId">
+                <button @click="openJob(j.jobId)" class="w-full text-left px-4 py-3 flex items-center gap-3 hover:bg-accent/40 transition-colors" :class="activeJob?.jobId===j.jobId?'bg-accent/60':''">
+                  <span class="grid place-items-center w-8 h-8 rounded-lg shrink-0" :class="jobTone(j.status)">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="w-4 h-4"><path :d="jobIcon(j.type)"/></svg>
+                  </span>
+                  <span class="min-w-0 flex-1">
+                    <span class="flex items-center gap-2">
+                      <span class="font-medium truncate" x-text="j.type"></span>
+                      <span x-show="j.status==='running'" class="spinner !w-3 !h-3"></span>
+                    </span>
+                    <span class="text-xs text-muted-foreground" x-text="relTime(j.createdAt) + (j.durationMs ? ' · '+fmtDur(j.durationMs) : '')"></span>
+                  </span>
+                  <span class="text-[10px] px-2 py-0.5 rounded-full border shrink-0" :class="jobStatusClass(j.status)" x-text="j.status"></span>
+                </button>
+              </template>
+              <div x-show="!jobs.length" class="text-center text-muted-foreground py-12 text-sm">No jobs yet.</div>
             </div>
+          </div>
+
+          <!-- ── log viewer ── -->
+          <div class="rounded-xl border border-zinc-800 bg-zinc-950 text-zinc-100 self-start h-[72vh] flex flex-col overflow-hidden shadow-sm">
+            <!-- empty state -->
+            <div x-show="!activeJob" class="flex-1 grid place-items-center text-center px-6">
+              <div class="space-y-2">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" class="w-9 h-9 mx-auto text-zinc-700"><path d="M4 17l6-6-6-6M12 19h8"/></svg>
+                <p class="text-sm text-zinc-500">Select a job to view its logs.</p>
+              </div>
+            </div>
+
+            <template x-if="activeJob">
+              <div class="flex flex-col h-full min-h-0">
+                <!-- header -->
+                <div class="px-4 py-3 border-b border-zinc-800 shrink-0 space-y-2.5">
+                  <div class="flex items-center gap-2.5">
+                    <span class="grid place-items-center w-7 h-7 rounded-md shrink-0" :class="jobTone(activeJob.status)">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="w-4 h-4"><path :d="jobIcon(activeJob.type)"/></svg>
+                    </span>
+                    <span class="min-w-0">
+                      <span class="block font-medium text-sm text-zinc-100 truncate" x-text="activeJob.type"></span>
+                      <span class="block text-[11px] text-zinc-500 font-mono">#<span x-text="activeJob.jobId"></span></span>
+                    </span>
+                    <span class="ml-auto flex items-center gap-2 shrink-0">
+                      <span x-show="activeJob.status==='running'" class="spinner !w-3.5 !h-3.5"></span>
+                      <span class="text-[11px] px-2 py-0.5 rounded-full border" :class="jobStatusClass(activeJob.status)" x-text="activeJob.status"></span>
+                    </span>
+                  </div>
+                  <div class="flex items-center gap-x-4 gap-y-1 flex-wrap text-[11px] text-zinc-500">
+                    <span class="flex items-center gap-1"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="w-3 h-3"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg><span x-text="'Started '+relTime(activeJob.createdAt)"></span></span>
+                    <span x-show="activeJob.durationMs" class="flex items-center gap-1"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="w-3 h-3"><path d="M5 12h14M13 6l6 6-6 6"/></svg><span x-text="fmtDur(activeJob.durationMs)"></span></span>
+                    <span class="flex items-center gap-1"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="w-3 h-3"><path d="M4 6h16M4 12h16M4 18h10"/></svg><span x-text="(activeJob.logs?.length||0)+' lines'"></span></span>
+                    <template x-if="activeJob.params && Object.keys(activeJob.params).length">
+                      <span class="font-mono text-zinc-600 truncate max-w-full" x-text="jobParamsSummary(activeJob.params)"></span>
+                    </template>
+                  </div>
+                  <!-- toolbar -->
+                  <div class="flex items-center gap-2">
+                    <div class="relative flex-1 min-w-0">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-zinc-600"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4-4"/></svg>
+                      <input x-model="logSearch" placeholder="Filter log lines…" class="w-full bg-zinc-900 border border-zinc-800 rounded-md pl-8 pr-7 py-1.5 text-xs text-zinc-200 placeholder-zinc-600 focus:ring-1 ring-zinc-600 outline-none">
+                      <button x-show="logSearch" @click="logSearch=''" class="absolute right-2 top-1/2 -translate-y-1/2 text-zinc-600 hover:text-zinc-300">✕</button>
+                    </div>
+                    <button @click="logWrap=!logWrap" :class="logWrap?'text-zinc-200 bg-zinc-800':'text-zinc-500'" class="px-2 py-1.5 rounded-md border border-zinc-800 hover:bg-zinc-800 text-[11px]" title="Toggle line wrap">Wrap</button>
+                    <button @click="logFollow=!logFollow" :class="logFollow?'text-emerald-400 bg-zinc-800':'text-zinc-500'" class="px-2 py-1.5 rounded-md border border-zinc-800 hover:bg-zinc-800 text-[11px] flex items-center gap-1" title="Auto-scroll to newest"><span x-show="logFollow" class="live-dot text-emerald-400">●</span>Follow</button>
+                    <button @click="copyLogs()" class="px-2 py-1.5 rounded-md border border-zinc-800 hover:bg-zinc-800 text-zinc-400 hover:text-zinc-200" title="Copy logs">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="w-3.5 h-3.5"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>
+                    </button>
+                  </div>
+                </div>
+
+                <!-- log body -->
+                <div x-ref="jobLog" @scroll="onLogScroll($event)" x-effect="activeJob?.logs?.length; logFollow && $nextTick(()=>$refs.jobLog && ($refs.jobLog.scrollTop=$refs.jobLog.scrollHeight))" class="flex-1 min-h-0 overflow-auto scroll-thin py-2 font-mono text-xs leading-relaxed">
+                  <template x-for="l in visibleLogs()" :key="l.i">
+                    <div class="group flex items-start gap-3 px-3 hover:bg-white/[0.04]">
+                      <span class="select-none text-zinc-700 text-right w-7 shrink-0 tabular-nums" x-text="l.i+1"></span>
+                      <span class="select-none text-zinc-600 shrink-0 tabular-nums" x-text="(l.at||'').slice(11,19)"></span>
+                      <span class="mt-[5px] w-1.5 h-1.5 rounded-full shrink-0" :class="logDot(l.msg)"></span>
+                      <span class="min-w-0 flex-1" :class="(logClass(l.msg))+' '+(logWrap?'whitespace-pre-wrap break-words':'whitespace-pre overflow-x-auto scroll-thin')" x-text="l.msg"></span>
+                    </div>
+                  </template>
+                  <div x-show="activeJob.status==='running'" class="flex items-center gap-2 text-zinc-500 px-3 pt-1.5"><span class="live-dot text-emerald-400">▍</span><span x-text="logSearch?'filtering…':'streaming…'"></span></div>
+                  <div x-show="!(activeJob.logs||[]).length && activeJob.status!=='running'" class="text-zinc-600 px-3 py-6">No log output.</div>
+                  <div x-show="logSearch && !visibleLogs().length && (activeJob.logs||[]).length" class="text-zinc-600 px-3 py-6">No lines match “<span x-text="logSearch"></span>”.</div>
+                </div>
+
+                <!-- error / result footer -->
+                <div x-show="activeJob.error || activeJob.result" class="border-t border-zinc-800 shrink-0 max-h-[30vh] overflow-auto scroll-thin">
+                  <div x-show="activeJob.error" class="m-3 rounded-md border border-rose-500/30 bg-rose-500/10 p-3">
+                    <div class="text-[10px] uppercase tracking-wide text-rose-400/80 mb-1 font-sans font-semibold">Error</div>
+                    <div class="font-mono text-xs text-rose-300 whitespace-pre-wrap break-words" x-text="activeJob.error"></div>
+                  </div>
+                  <div x-show="activeJob.result" class="m-3 rounded-md border border-emerald-500/20 bg-emerald-500/[0.06] p-3">
+                    <div class="flex items-center justify-between mb-1">
+                      <span class="text-[10px] uppercase tracking-wide text-emerald-400/80 font-sans font-semibold">Result</span>
+                      <button @click="copy(JSON.stringify(activeJob.result,null,2))" class="text-emerald-400/70 hover:text-emerald-300" title="Copy result"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="w-3.5 h-3.5"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg></button>
+                    </div>
+                    <pre class="font-mono text-xs text-emerald-300/90 whitespace-pre-wrap break-words" x-text="JSON.stringify(activeJob.result,null,2)"></pre>
+                  </div>
+                </div>
+              </div>
+            </template>
           </div>
         </div>
       </section>
@@ -845,6 +1006,36 @@
     </div>
   </div>
 
+  <!-- ════════════ COMPARE MODAL ════════════ -->
+  <div x-show="compare.open" x-transition.opacity class="fixed inset-0 bg-black/50 z-50 flex justify-center items-start overflow-auto py-8 p-4" @click.self="compare.open=false">
+    <div class="bg-card rounded-xl border shadow-xl w-full max-w-4xl">
+      <div class="flex justify-between items-center p-4 border-b">
+        <div><h3 class="font-semibold">Pipeline comparison</h3>
+          <p class="text-xs text-muted-foreground" x-text="compare.slug+' · disagreements first'"></p></div>
+        <button @click="compare.open=false" class="text-muted-foreground hover:text-foreground text-2xl leading-none">×</button>
+      </div>
+      <div class="p-4">
+        <div x-show="compare.data && compare.data.pipelines.length<2" class="text-sm text-muted-foreground py-6 text-center">Only one pipeline has run for this document — nothing to compare. Run another pipeline first.</div>
+        <div x-show="compare.data && compare.data.pipelines.length>=2" class="overflow-auto scroll-thin max-h-[65vh]">
+          <table class="w-full text-sm border-collapse">
+            <thead><tr class="text-left text-xs uppercase tracking-wide text-muted-foreground border-b">
+              <th class="py-2 pr-3 font-medium">Field</th>
+              <template x-for="p in (compare.data?.pipelines||[])" :key="p"><th class="py-2 px-3 font-medium" x-text="p"></th></template>
+            </tr></thead>
+            <tbody>
+              <template x-for="f in (compare.data?.fields||[])" :key="f.key">
+                <tr class="border-b last:border-0" :class="f.agree?'':'bg-amber-500/5'">
+                  <td class="py-1.5 pr-3 align-top"><span class="font-mono text-xs" x-text="f.key"></span><span x-show="!f.agree" class="ml-1 text-amber-500 text-[10px]">≠</span></td>
+                  <template x-for="p in (compare.data?.pipelines||[])" :key="p"><td class="py-1.5 px-3 align-top text-xs" :class="f.agree?'text-muted-foreground':''" x-text="compareCell(f.values[p])"></td></template>
+                </tr>
+              </template>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <!-- ════════════ SCHEMA TEST MODAL ════════════ -->
   <div x-show="schemaTest.open" x-transition.opacity class="fixed inset-0 bg-black/50 z-50 flex justify-center items-start overflow-auto py-8 p-4" @click.self="schemaTest.open=false">
     <div class="bg-card rounded-xl border shadow-xl w-full max-w-3xl">
@@ -955,8 +1146,10 @@
           <div><h3 class="font-semibold" x-text="exView.result?.company_name||exView.ipoSlug"></h3>
             <div class="text-xs text-muted-foreground flex items-center gap-1.5 flex-wrap"><span class="uppercase" x-text="exView.docType"></span> · <span x-text="exView.pipeline"></span> · <span class="px-1.5 rounded border" :class="exStatusClass(exView.status)" x-text="exView.status"></span>
               <span x-show="exView.validation" class="px-1.5 rounded-full border font-medium" :class="scoreClass(exView.validation?.score)" x-text="'score '+(exView.validation?.score)+'/100'"></span></div></div>
-          <div class="flex gap-2">
+          <div class="flex gap-2 flex-wrap justify-end">
             <button @click="revalidate()" class="px-3 py-1.5 rounded-md border bg-card text-sm" title="Re-score against current rules (no LLM)">Re-validate</button>
+            <button @click="openCompare()" class="px-3 py-1.5 rounded-md border bg-card text-sm" title="Compare pipelines field-by-field">Compare</button>
+            <button @click="markGolden()" class="px-3 py-1.5 rounded-md border bg-card text-sm" title="Save this result as verified ground truth for eval">★ Golden</button>
             <button @click="editing=!editing" class="px-3 py-1.5 rounded-md border bg-card text-sm" x-text="editing?'View':'Edit'"></button>
             <button x-show="editing" @click="saveExtraction()" class="px-3 py-1.5 rounded-md bg-emerald-600 text-white text-sm">Save</button>
             <button x-show="exView.status==='review'" @click="resolveReview()" class="px-3 py-1.5 rounded-md bg-amber-500 text-white text-sm">Mark reviewed</button>
@@ -1070,6 +1263,7 @@ function app() {
         { id:'overview', label:'Overview', icon:'M3 3v18h18M7 14l3-3 3 3 4-5' },
         { id:'ipos', label:'IPOs', icon:'M3 7h18M3 12h18M3 17h18' },
         { id:'review', label:'Extractions', icon:'M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z M14 2v6h6' },
+        { id:'eval', label:'Eval', icon:'M3 3v18h18M18 9l-5 5-3-3-4 4' },
         { id:'jobs', label:'Jobs', icon:'M12 2v4M12 18v4M4.9 4.9l2.8 2.8M16.3 16.3l2.8 2.8M2 12h4M18 12h4' },
       ]},
       { section: 'Configure', items: [
@@ -1095,6 +1289,7 @@ function app() {
     schema:{}, schemaKeys:[], defaultValue:'[-]',
     extractions:[], exFilter:'review', exView:null, editing:false, editResult:{}, editResultText:{},
     jobs:[], jobFilters:{type:'',status:''}, jobAutoRefresh:false, activeJob:null,
+    logSearch:'', logWrap:false, logFollow:true,
     scrapeForm:{sources:['upstox','nse','groww','zerodha'],dryRun:false},
     bulkForm:{pipeline:'cascade',docType:'auto',status:'',force:false},
 
@@ -1111,6 +1306,9 @@ function app() {
     backups:{ open:false, key:'', items:[] },
     // schema "test on an IPO" (runs the edited, unsaved schema; saves nothing)
     schemaTest:{ open:false, search:'', results:[], slug:'', companyName:'', docType:'auto', pipeline:'gemini', job:null, _poll:null },
+    // cross-pipeline compare + eval / golden set
+    compare:{ open:false, slug:'', data:null },
+    evalState:{ runs:[], goldens:[], activeRun:null, pipeline:'gemini', job:null, _poll:null },
     // sections editor
     sectionDraft:{aliases:{},targets:[]}, addSectionOpen:false, newSection:{key:'',aliases:'',target:true}, sectionSearch:'',
     // pdf lab
@@ -1169,6 +1367,7 @@ function app() {
       if(id==='overview'){ this.loadStats(); this.loadMetrics(); }
       if(id==='schema'){ this.schemaDraft=JSON.parse(JSON.stringify(this.schema)); }
       if(id==='validation'){ this.loadValidation(); }
+      if(id==='eval'){ this.loadEval(); }
       if(id==='sections'){ this.loadSections(); }
     },
     toggleTheme(){ this.dark=!this.dark; document.documentElement.classList.toggle('dark',this.dark); localStorage.setItem('theme',this.dark?'dark':'light'); if(this.page==='overview') this.renderCharts(); },
@@ -1297,10 +1496,22 @@ function app() {
     async saveExtraction(){ const result=this.buildEditedResult(); try{ await this.api('/extractions/'+this.exView.ipoSlug,{method:'PATCH',headers:{'content-type':'application/json'},body:JSON.stringify({docType:this.exView.docType,pipeline:this.exView.pipeline,result})}); this.exView.result=result; this.editing=false; this.notify('Saved corrections'); }catch(e){ this.notify(e.message,true); } },
     async resolveReview(){ try{ const body={docType:this.exView.docType,pipeline:this.exView.pipeline,status:'reviewed'}; if(this.editing) body.result=this.buildEditedResult(); await this.api('/extractions/'+this.exView.ipoSlug,{method:'PATCH',headers:{'content-type':'application/json'},body:JSON.stringify(body)}); this.exView.status='reviewed'; if(body.result)this.exView.result=body.result; this.notify('Marked reviewed'); this.loadExtractions(); this.loadStats(); }catch(e){ this.notify(e.message,true); } },
     async revalidate(){ try{ const r=await this.api('/extractions/'+this.exView.ipoSlug+'/validate',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({docType:this.exView.docType,pipeline:this.exView.pipeline})}); const full=(await this.api('/extractions/'+this.exView.ipoSlug)).extractions.find(x=>x.docType===this.exView.docType&&x.pipeline===this.exView.pipeline); if(full){ this.exView.validation=full.validation; this.exView.status=full.status; } this.notify('Re-scored'+(r.scored?.[0]?(' → '+r.scored[0].score+'/100'):'')); this.loadExtractions(); this.loadStats(); }catch(e){ this.notify(e.message,true); } },
+    async markGolden(){ try{ const r=await this.api('/extractions/'+this.exView.ipoSlug+'/golden',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({docType:this.exView.docType,pipeline:this.exView.pipeline})}); this.notify('Saved as golden ('+r.golden.fieldCount+' fields)'); }catch(e){ this.notify(e.message,true); } },
+    async openCompare(){ this.compare={open:true,slug:this.exView.ipoSlug,data:null}; try{ this.compare.data=await this.api('/extractions/'+this.exView.ipoSlug+'/compare?docType='+this.exView.docType); }catch(e){ this.notify(e.message,true); this.compare.open=false; } },
+    compareCell(v){ if(Array.isArray(v)) return v.length+' item(s)'; return this.isEmpty(v)?'—':String(v); },
+
+    // ── EVAL / GOLDEN SET ──
+    async loadEval(){ try{ const [runs,golden]=await Promise.all([this.api('/eval/runs'),this.api('/golden')]); this.evalState.runs=runs.runs; this.evalState.goldens=golden.golden; }catch(e){ this.notify(e.message,true); } },
+    async runEval(){ try{ const r=await this.api('/eval/run',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({pipeline:this.evalState.pipeline})}); this.evalState.job={jobId:r.jobId,status:'running',logs:[]}; this.pollEval(r.jobId); this.notify('Eval started'); }catch(e){ this.notify(e.message,true); } },
+    pollEval(id){ clearTimeout(this.evalState._poll); const step=async()=>{ try{ const j=await this.api('/jobs/'+id); this.evalState.job=j; if(j.status==='running'){ this.evalState._poll=setTimeout(step,3000); } else { this.loadEval(); if(j.status==='failed') this.notify('Eval failed: '+j.error,true); else this.notify('Eval done'); } }catch(e){} }; step(); },
+    async openEvalRun(id){ try{ this.evalState.activeRun=await this.api('/eval/runs/'+id); }catch(e){ this.notify(e.message,true); } },
+    async delGolden(slug){ if(!confirm('Remove golden for '+slug+'?')) return; try{ await this.api('/golden/'+slug,{method:'DELETE'}); this.notify('Removed'); this.loadEval(); }catch(e){ this.notify(e.message,true); } },
+    pct(v){ return v==null?'—':Math.round(v*100)+'%'; },
+    accClass(v){ if(v==null) return 'text-muted-foreground'; if(v>=0.9) return 'text-emerald-500'; if(v>=0.7) return 'text-amber-500'; return 'text-rose-500'; },
 
     // ── jobs ──
     async loadJobs(){ const qs=new URLSearchParams(); if(this.jobFilters.type)qs.set('type',this.jobFilters.type); if(this.jobFilters.status)qs.set('status',this.jobFilters.status); try{ this.jobs=(await this.api('/jobs?'+qs)).jobs; }catch(e){} },
-    async openJob(id){ try{ this.activeJob=await this.api('/jobs/'+id); }catch(e){ this.notify(e.message,true); } },
+    async openJob(id){ try{ const sameJob=this.activeJob?.jobId===id; this.activeJob=await this.api('/jobs/'+id); if(!sameJob){ this.logSearch=''; this.logFollow=true; this.$nextTick(()=>{ if(this.$refs.jobLog) this.$refs.jobLog.scrollTop=this.$refs.jobLog.scrollHeight; }); } }catch(e){ this.notify(e.message,true); } },
     async tickJobs(){ await this.loadJobs(); if(this.activeJob&&this.activeJob.status==='running') await this.openJob(this.activeJob.jobId); },
 
     // ── control ──
@@ -1377,6 +1588,17 @@ function app() {
     sevClass(s){ return {error:'text-rose-500',warning:'text-amber-500',info:'text-muted-foreground'}[s]||'text-muted-foreground'; },
     jobStatusClass(s){ return {running:'border-blue-500/30 text-blue-500',completed:'border-emerald-500/30 text-emerald-500',failed:'border-rose-500/30 text-rose-500'}[s]||'border-border text-muted-foreground'; },
     logClass(msg){ const m=(msg||'').toLowerCase(); if(/error|fail|exception|✕|❌|timed out/.test(m)) return 'text-rose-400'; if(/warn|retry|skip|fallback|⚠/.test(m)) return 'text-amber-400'; if(/done|success|complete|saved|found|✓|✅/.test(m)) return 'text-emerald-400'; return 'text-zinc-300'; },
+    logDot(msg){ const m=(msg||'').toLowerCase(); if(/error|fail|exception|✕|❌|timed out/.test(m)) return 'bg-rose-500'; if(/warn|retry|skip|fallback|⚠/.test(m)) return 'bg-amber-500'; if(/done|success|complete|saved|found|✓|✅/.test(m)) return 'bg-emerald-500'; return 'bg-zinc-700'; },
+    // ── log viewer helpers ──
+    visibleLogs(){ const logs=this.activeJob?.logs||[]; const q=(this.logSearch||'').toLowerCase().trim(); const withIdx=logs.map((l,i)=>({...l,i})); return q?withIdx.filter(l=>(l.msg||'').toLowerCase().includes(q)):withIdx; },
+    onLogScroll(e){ const el=e.target; const atBottom=el.scrollHeight-el.scrollTop-el.clientHeight<24; this.logFollow=atBottom; },
+    async copy(text){ try{ await navigator.clipboard.writeText(text); this.notify('Copied to clipboard'); }catch(e){ this.notify('Copy failed',true); } },
+    copyLogs(){ const logs=this.activeJob?.logs||[]; const text=logs.map(l=>`${(l.at||'').slice(11,19)}  ${l.msg}`).join('\n'); this.copy(text||'(no logs)'); },
+    fmtDur(ms){ if(ms==null) return '—'; if(ms<1000) return ms+'ms'; const s=ms/1000; if(s<60) return (s<10?s.toFixed(1):Math.round(s))+'s'; const m=Math.floor(s/60); return m+'m '+Math.round(s%60)+'s'; },
+    relTime(d){ if(!d) return '—'; const t=new Date(d).getTime(); if(isNaN(t)) return d; const diff=Date.now()-t; const s=Math.round(diff/1000); if(s<5) return 'just now'; if(s<60) return s+'s ago'; const m=Math.floor(s/60); if(m<60) return m+'m ago'; const h=Math.floor(m/60); if(h<24) return h+'h ago'; const dd=Math.floor(h/24); if(dd<7) return dd+'d ago'; return this.fmtDate(d); },
+    jobTone(s){ return {running:'bg-blue-500/15 text-blue-400',completed:'bg-emerald-500/15 text-emerald-400',failed:'bg-rose-500/15 text-rose-400'}[s]||'bg-zinc-500/15 text-zinc-400'; },
+    jobIcon(type){ const t=type||''; if(t==='scrape') return 'M21 12a9 9 0 1 1-9-9 9 9 0 0 1 9 9zM3 12h18M12 3a15 15 0 0 1 0 18M12 3a15 15 0 0 0 0 18'; if(t.startsWith('extraction')) return 'M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8zM14 2v6h6M9 13h6M9 17h4'; if(t==='gmp') return 'M3 17l6-6 4 4 7-7M14 8h7v7'; if(t==='historical') return 'M3 3v5h5M3.05 13a9 9 0 1 0 2.6-6.5L3 8M12 7v5l3 2'; if(t.startsWith('tool')) return 'M14.7 6.3a4 4 0 0 1-5.4 5.4l-5 5a2 2 0 0 0 2.8 2.8l5-5a4 4 0 0 0 5.4-5.4l-2.4 2.4-2.8-2.8 2.4-2.4z'; return 'M12 2v4M12 18v4M4.9 4.9l2.8 2.8M16.3 16.3l2.8 2.8M2 12h4M18 12h4'; },
+    jobParamsSummary(p){ if(!p) return ''; const parts=[]; for(const k of Object.keys(p)){ let v=p[k]; if(v==null||v===''||v===false) continue; if(Array.isArray(v)) v=v.join(','); else if(typeof v==='object') continue; parts.push(`${k}=${v}`); } return parts.join('  ').slice(0,120); },
   };
 }
 </script>
