@@ -1,10 +1,14 @@
 /**
- * extract.ts — the v2 extraction ladder, markdown-first (PRD §3.2, §8 S4, §11.7).
+ * extract.ts — the v2 extraction ladder, FIRECRAWL-first (PRD §3.2, §8 S4, §11.7).
  *
- *   local raw text (free) → local .md to Firecrawl /parse (cheap)
- *                         → raw text to DeepSeek (fractions of a cent)
- *                         → mini-PDF to Firecrawl /parse (expensive — table rescue)
- *                         → review floor. Never guess.
+ *   local clean HTML to Firecrawl /parse (cheap credits)
+ *                       → mini-PDF to Firecrawl /parse (real layout — table workhorse)
+ *                       → raw text to DeepSeek (OFF by default — CFG.extract.useDeepseek)
+ *                       → review floor. Never guess.
+ *
+ * DeepSeek costs real money; Firecrawl credits don't. The ladder therefore exhausts
+ * both Firecrawl paths before it will even consider DeepSeek, and DeepSeek only runs
+ * at all when EXTRACT_USE_DEEPSEEK=true.
  */
 import type * as mupdf from 'mupdf';
 import type { Db } from 'mongodb';
@@ -12,11 +16,12 @@ import type { R2 } from './r2';
 import { FIELDS, schemaFor, type DocType, type FieldDef } from './registry/fields';
 import { validateField, type FieldPayload } from './validate';
 import { miniPdf, rangeText, pagePng } from './pdf/mupdf-helpers';
-import { sectionToMarkdown } from './pdf/to-markdown';
+import { sectionToHtml } from './pdf/to-markdown';
+import type { ParseResult } from './clients/firecrawl';
 
 export interface ExtractionClients {
-  parseMdJson: (md: string, name: string, schema: object) => Promise<Record<string, unknown>>;
-  parsePdfBoth: (pdf: Buffer, name: string, schema: object) => Promise<Record<string, unknown>>;
+  parseHtmlJson: (html: string, name: string, schema: object) => Promise<ParseResult>;
+  parsePdfJson: (pdf: Buffer, name: string, schema: object) => Promise<ParseResult>;
   deepseekJson: (system: string, user: string, onTokens?: (t: number) => void) => Promise<unknown>;
   extractSystem: (schemaText: string) => string;
 }
@@ -42,24 +47,41 @@ export interface Ctx {
   allLayerValues: (key: string) => Record<string, unknown>;
   bumpCost: (layer: 'firecrawl_md' | 'firecrawl_pdf' | 'deepseek_text' | 'combined') => void;
   onDeepseekTokens: (tokens: number) => void;
+  /** Field-extraction ladder may fall through to DeepSeek (CFG.extract.useDeepseek). */
+  useDeepseek: boolean;
 }
 
 const TABLE_CONFIDENCE_FLOOR = 0.7;
+
+export interface ExtractOpts {
+  /** Restrict this pass to these field keys (e.g. the still-open set). */
+  only?: string[];
+  /**
+   * Final pass (default true) runs the review floor + high-stakes disagreement
+   * check and writes needs_review/not_expected. An opportunistic pass (false —
+   * e.g. the cover/front-matter sweep) only persists what it validates and leaves
+   * everything else untouched for a later pass over the located range.
+   */
+  finalPass?: boolean;
+}
 
 export async function extractSection(
   ctx: Ctx,
   section: string,
   range: { start: number; end: number },
+  opts: ExtractOpts = {},
 ): Promise<void> {
+  const finalPass = opts.finalPass !== false;
   const dynamicDoc = ctx.docType === 'ADDENDUM'; // extract only what's present (PRD §8 S2)
-  const defs = FIELDS.filter(
+  let defs = FIELDS.filter(
     (f) => f.section === section && (dynamicDoc || f.expectedIn.includes(ctx.docType as 'DRHP' | 'RHP' | 'PROSPECTUS')),
   );
+  if (opts.only) defs = defs.filter((d) => opts.only!.includes(d.key));
   if (!defs.length) return;
 
   // Step 0 — local representations (free). ±1 free widening on raw text.
   const sectionText = rangeText(ctx.pdfDoc, range.start - 1, range.end + 1);
-  const { md, tableConfidence } = sectionToMarkdown(ctx.pdfDoc, range.start, range.end);
+  const { html, tableConfidence } = sectionToHtml(ctx.pdfDoc, range.start, range.end);
   const results: Record<string, Record<string, unknown>> = {};
 
   const settle = (cand: unknown, layer: string, evidenceAgainst = sectionText): void => {
@@ -78,39 +100,60 @@ export async function extractSection(
     }
   };
 
-  // tableConfidence router (PRD §9, fallback #25): if local text mangles this
-  // section's tables, don't pay for a doomed cheap call.
-  const mdViable = tableConfidence >= TABLE_CONFIDENCE_FLOOR && !ctx.isScanned;
-
-  // ── Layer 1: Firecrawl /parse on local .md (primary — cheap credits) ───────────
-  if (mdViable) {
-    const d1 = await ctx.clients.parseMdJson(md, section, schemaFor(defs)).catch((e) => {
-      ctx.log(`L1 firecrawl_md failed for ${section}: ${String(e)}`);
-      return null;
+  // ── Layer 1: Firecrawl /parse on local clean HTML (primary — cheap credits) ─────
+  // tableConfidence router (PRD §9): if local table detection was inconsistent the
+  // emitted HTML tables will be malformed too — skip straight to the real-layout
+  // mini-PDF instead of paying for a doomed cheap call.
+  const htmlViable = tableConfidence >= TABLE_CONFIDENCE_FLOOR && !ctx.isScanned;
+  if (htmlViable) {
+    const res1 = await ctx.clients.parseHtmlJson(html, section, schemaFor(defs)).catch((e: unknown) => {
+      ctx.log(`L1 firecrawl_html failed for ${section}: ${String(e)}`);
+      return { json: null, markdown: '' } as ParseResult;
     });
-    settle((d1 as Record<string, unknown> | null)?.json, 'firecrawl_md');
+    if (res1.json) settle(res1.json, 'firecrawl_md', res1.markdown + '\n' + sectionText);
   }
 
-  // ── Layer 2: DeepSeek on raw text (fallback 1) with failure feedback ────────────
+  // ── Layer 2: mini-PDF to Firecrawl /parse (real PDF layout — the table workhorse) ─
   const open2 = defs.filter((d) => !results[d.key]);
-  if (open2.length && !ctx.isScanned) {
-    const widened = rangeText(ctx.pdfDoc, range.start - 3, range.end + 3); // widened ±3
-    const feedback = open2.map((d) => ctx.fmtLastError(d.key)).filter(Boolean).join('\n');
-    const d2 = await ctx.clients
-      .deepseekJson(
-        ctx.clients.extractSystem(JSON.stringify(schemaFor(open2))),
-        `${feedback ? 'PREVIOUS FAILURES:\n' + feedback + '\n\n' : ''}DOCUMENT TEXT:\n${widened}`,
-        ctx.onDeepseekTokens,
-      )
-      .catch((e) => {
-        ctx.log(`L2 deepseek failed for ${section}: ${String(e)}`);
-        return null;
-      });
-    settle(d2, 'deepseek_text', widened);
+  if (open2.length) {
+    const mini = miniPdf(ctx.pdfBuf, range.start, range.end);
+    const res2 = await ctx.clients.parsePdfJson(mini, section, schemaFor(open2)).catch((e: unknown) => {
+      ctx.log(`L2 firecrawl_pdf failed for ${section}: ${String(e)}`);
+      return { json: null, markdown: '' } as ParseResult;
+    });
+    if (res2.json) {
+      // mini-PDF pages renumber from 1; map them back to original doc pages.
+      for (const v of Object.values(res2.json)) {
+        const pv = v as { page?: unknown };
+        if (typeof pv.page === 'number') pv.page = pv.page + range.start;
+      }
+      // evidence checked against Firecrawl's own markdown (+ raw text fallback).
+      settle(res2.json, 'firecrawl_pdf', res2.markdown + '\n' + sectionText);
+    }
+  }
+
+  // ── Layer 3: DeepSeek — last resort, OFF by default (CFG.extract.useDeepseek) ────
+  if (ctx.useDeepseek && !ctx.isScanned) {
+    const open3 = defs.filter((d) => !results[d.key]);
+    if (open3.length) {
+      const widened = rangeText(ctx.pdfDoc, range.start - 3, range.end + 3); // widened ±3
+      const feedback = open3.map((d) => ctx.fmtLastError(d.key)).filter(Boolean).join('\n');
+      const d3 = await ctx.clients
+        .deepseekJson(
+          ctx.clients.extractSystem(JSON.stringify(schemaFor(open3))),
+          `${feedback ? 'PREVIOUS FAILURES:\n' + feedback + '\n\n' : ''}DOCUMENT TEXT:\n${widened}`,
+          ctx.onDeepseekTokens,
+        )
+        .catch((e: unknown) => {
+          ctx.log(`L3 deepseek failed for ${section}: ${String(e)}`);
+          return null;
+        });
+      settle(d3, 'deepseek_text', widened);
+    }
   }
 
   // ADDENDUM: fields the doc simply doesn't carry are not_expected, not failures.
-  if (dynamicDoc) {
+  if (dynamicDoc && finalPass) {
     for (const d of defs.filter((d) => !results[d.key])) {
       if (ctx.lastError(d.key) === 'value_null' || ctx.lastError(d.key) === null) {
         results[d.key] = { value: null, status: 'not_expected' };
@@ -118,53 +161,28 @@ export async function extractSection(
     }
   }
 
-  // ── Layer 3: mini-PDF to Firecrawl (fallback 2 — expensive, surgical) ───────────
-  const open3 = defs.filter((d) => !results[d.key]);
-  if (open3.length) {
-    const mini = miniPdf(ctx.pdfBuf, range.start, range.end);
-    const d3 = await ctx.clients.parsePdfBoth(mini, section, schemaFor(open3)).catch((e) => {
-      ctx.log(`L3 firecrawl_pdf failed for ${section}: ${String(e)}`);
-      return null;
-    });
-    const d3md = typeof d3?.markdown === 'string' ? (d3.markdown as string) : '';
-    if (d3 && 'json' in d3) {
-      // Scanned docs: evidence checked against Firecrawl's own markdown (fallback #3).
-      settle(d3.json, 'firecrawl_pdf', d3md + '\n' + sectionText);
+  if (finalPass) {
+    // ── Layer 4: review floor — never guess ──────────────────────────────────
+    for (const d of defs.filter((d) => !results[d.key])) {
+      await queueReview(ctx, d, range, ctx.lastError(d.key) ?? 'ladder_exhausted');
+      results[d.key] = { value: null, status: 'needs_review' };
     }
-    // last automated shot: Firecrawl's own markdown → DeepSeek
-    const open3b = defs.filter((d) => !results[d.key]);
-    if (open3b.length && d3md.length > 100) {
-      const d3b = await ctx.clients
-        .deepseekJson(
-          ctx.clients.extractSystem(JSON.stringify(schemaFor(open3b))),
-          `DOCUMENT (markdown):\n${d3md}`,
-          ctx.onDeepseekTokens,
-        )
-        .catch(() => null);
-      settle(d3b, 'combined', d3md + '\n' + sectionText);
-    }
-  }
-
-  // ── Layer 4: review floor — never guess ────────────────────────────────────
-  for (const d of defs.filter((d) => !results[d.key])) {
-    await queueReview(ctx, d, range, ctx.lastError(d.key) ?? 'ladder_exhausted');
-    results[d.key] = { value: null, status: 'needs_review' };
-  }
-
-  // High-stakes disagreement check — straight to review, no silent tiebreak.
-  for (const d of defs.filter((d) => d.highStakes)) {
-    const vals = Object.values(ctx.allLayerValues(d.key)).filter((v) => v !== null && v !== undefined);
-    if (vals.length > 1 && new Set(vals.map((v) => JSON.stringify(v))).size > 1) {
-      await queueReview(ctx, d, range, 'source_disagreement');
-      results[d.key] = { value: null, status: 'needs_review', reason: 'source_disagreement' };
+    // High-stakes disagreement check — straight to review, no silent tiebreak.
+    for (const d of defs.filter((d) => d.highStakes)) {
+      const vals = Object.values(ctx.allLayerValues(d.key)).filter((v) => v !== null && v !== undefined);
+      if (vals.length > 1 && new Set(vals.map((v) => JSON.stringify(v))).size > 1) {
+        await queueReview(ctx, d, range, 'source_disagreement');
+        results[d.key] = { value: null, status: 'needs_review', reason: 'source_disagreement' };
+      }
     }
   }
 
   for (const [k, v] of Object.entries(results)) await ctx.setField(k, v); // Mongo, atomic
 
   ctx.log(
-    `section ${section}: ${Object.values(results).filter((r) => r.status === 'validated').length}/${defs.length} validated` +
-      ` (tableConfidence ${tableConfidence.toFixed(2)}${mdViable ? '' : ' → md path skipped'})`,
+    `section ${section}${finalPass ? '' : ' (front-matter)'}: ` +
+      `${Object.values(results).filter((r) => r.status === 'validated').length}/${defs.length} validated` +
+      ` (tableConfidence ${tableConfidence.toFixed(2)}${htmlViable ? '' : ' → html path skipped'})`,
   );
 }
 

@@ -62,6 +62,85 @@ function clusterX(rows: Cell[][]): number[] {
 
 const isAllCaps = (s: string) => s.length >= 4 && s === s.toUpperCase() && /[A-Z]/.test(s);
 
+const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+/**
+ * Like sectionToMarkdown, but emits clean STRUCTURED HTML — real `<table>`/`<tr>`/`<td>`
+ * for table regions, `<h2>` for headings, `<p>` for prose. Firecrawl's `/parse` reads
+ * HTML structure, so genuine table markup (vs. a `<pre>` blob) is what lets the cheap
+ * path carry numeric/table fields (price band, lot size, issue sizes). Each page is
+ * still announced with a `--- page N ---` marker so the model can attribute pages.
+ */
+export function sectionToHtml(
+  doc: mupdf.Document,
+  start: number,
+  end: number,
+): { html: string; tableConfidence: number } {
+  const last = doc.countPages() - 1;
+  const lo = Math.max(0, start);
+  const hi = Math.min(last, end);
+
+  const allSizes: number[] = [];
+  const perPage: Cell[][] = [];
+  for (let p = lo; p <= hi; p++) {
+    const cells = collectCells(doc, p);
+    perPage.push(cells);
+    for (const c of cells) if (c.size > 0) allSizes.push(c.size);
+  }
+  allSizes.sort((a, b) => a - b);
+  const median = allSizes.length ? (allSizes[Math.floor(allSizes.length / 2)] as number) : 10;
+
+  let body = '';
+  let tableRows = 0;
+  let consistentTableRows = 0;
+
+  for (let p = lo; p <= hi; p++) {
+    body += `<p>--- page ${p + 1} ---</p>\n`;
+    const cells = perPage[p - lo] ?? [];
+    const rows = toRows(cells);
+    const columns = clusterX(rows);
+    const multiRows = rows.filter((r) => r.length >= 2);
+    const tableMode = multiRows.length >= 3 && columns.length >= 3;
+
+    let inTable = false;
+    let expectedCols: number | null = null;
+    const closeTable = (): void => {
+      if (inTable) {
+        body += '</table>\n';
+        inTable = false;
+        expectedCols = null;
+      }
+    };
+
+    for (const row of rows) {
+      const joined = row.map((c) => c.text).join(' ').trim();
+      if (!joined) continue;
+
+      if (tableMode && row.length >= 2) {
+        tableRows++;
+        if (expectedCols === null) expectedCols = row.length;
+        if (row.length === expectedCols) consistentTableRows++;
+        if (!inTable) {
+          body += '<table>\n';
+          inTable = true;
+        }
+        body += '<tr>' + row.map((c) => `<td>${esc(c.text)}</td>`).join('') + '</tr>\n';
+        continue;
+      }
+
+      closeTable();
+      const cell = row[0];
+      if (!cell) continue;
+      const heading = cell.size >= 1.25 * median || (cell.bold && isAllCaps(joined));
+      body += heading ? `<h2>${esc(joined)}</h2>\n` : `<p>${esc(joined)}</p>\n`;
+    }
+    closeTable();
+  }
+
+  const tableConfidence = tableRows === 0 ? 1 : consistentTableRows / tableRows;
+  return { html: `<!DOCTYPE html><html><body>\n${body}</body></html>`, tableConfidence };
+}
+
 export function sectionToMarkdown(
   doc: mupdf.Document,
   start: number,

@@ -6,8 +6,16 @@
  */
 import { fieldByKey } from './registry/fields';
 
+// Evidence comes back through Firecrawl's markdown/table rendering, which inserts
+// pipes/colons and reflows whitespace. Compare on alphanumerics only: drop currency
+// + thousands separators first (so "1,234"=="1234"), then collapse every other run
+// of punctuation/whitespace to a single space.
 const norm = (s: string): string =>
-  s.replace(/\s+/g, ' ').replace(/[₹,]/g, '').trim().toLowerCase();
+  s
+    .toLowerCase()
+    .replace(/[₹,]/g, '')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
 
 export function verifyEvidence(evidence: string, sourceText: string): boolean {
   if (!evidence || evidence.length < 8) return false;

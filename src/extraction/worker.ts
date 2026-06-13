@@ -13,7 +13,7 @@ import { openDoc, pagePng } from './pdf/mupdf-helpers';
 import { classifyDoc } from './classify';
 import { locateSections, type LocatedMap } from './locate';
 import { extractSection, type Ctx, type ExtractionClients } from './extract';
-import { parseMdJson, parsePdfBoth } from './clients/firecrawl';
+import { parseHtmlJson, parsePdfJson } from './clients/firecrawl';
 import { deepseekJson, EXTRACT_SYSTEM } from './clients/deepseek';
 import { FIELDS, REGISTRY_SECTIONS, type DocType } from './registry/fields';
 import { claimNext, setStage, setStatus, setField, markPoison, expectedFields } from './state';
@@ -23,11 +23,16 @@ import { janitorForDoc, janitor } from './janitor';
 import { logEvent } from './db';
 
 const DEFAULT_CLIENTS: ExtractionClients = {
-  parseMdJson,
-  parsePdfBoth,
+  parseHtmlJson,
+  parsePdfJson,
   deepseekJson,
   extractSystem: EXTRACT_SYSTEM,
 };
+
+// Sections whose registry fields physically live on the cover page + "THE OFFER"
+// summary, not (only) inside their located range — price band, issue sizes, lot,
+// dates, ISIN, registrar, BRLMs. Swept first, cheaply, before the located ranges.
+const COVER_SECTIONS = ['offer_structure', 'general_info'];
 
 export async function startWorkerLoop(db: Db, r2: R2, clients: ExtractionClients = DEFAULT_CLIENTS): Promise<never> {
   // Janitor also runs on a 6h timer (PRD §5.3).
@@ -141,23 +146,39 @@ export async function processDoc(
     // ── S4 extract (skips validated fields — resume-safe, new-field-cheap) ─────────
     await setStatus(db, id, 'extracting');
     const ctx = makeCtx(db, r2, id, state, buf, pdfDoc, clients, log);
+    const openFor = async (section: string): Promise<string[]> => {
+      const fresh = (await documents.findOne({ _id: id as never })) as MongoDoc;
+      return FIELDS.filter(
+        (f) => f.section === section && !['validated', 'not_expected', 'needs_review'].includes(
+          (fresh.fields?.[f.key] as { status?: string } | undefined)?.status ?? '',
+        ),
+      ).map((f) => f.key);
+    };
+
+    // Front-matter sweep: the cover + summary carry the scattered commercial terms
+    // that rarely sit inside a section's located range. Opportunistic (finalPass:
+    // false) — it only persists what it validates; misses fall through to the
+    // located-range loop below, which then queues the true stragglers for review.
+    const coverRange = { start: 0, end: Math.min(2, pdfDoc.countPages() - 1) };
+    for (const section of COVER_SECTIONS) {
+      checkBudget();
+      const open = await openFor(section);
+      if (!open.length) continue;
+      await extractSection(ctx, section, coverRange, { only: open, finalPass: false });
+    }
+
     const sections = Object.entries(map ?? {}).filter(([s]) => REGISTRY_SECTIONS.includes(s));
     let i = 0;
     for (const [section, range] of sections) {
       i++;
       checkBudget();
-      const fresh = (await documents.findOne({ _id: id as never })) as MongoDoc;
-      const open = FIELDS.filter(
-        (f) => f.section === section && !['validated', 'not_expected', 'needs_review'].includes(
-          (fresh.fields?.[f.key] as { status?: string } | undefined)?.status ?? '',
-        ),
-      );
+      const open = await openFor(section);
       if (!open.length) continue;
       await documents.updateOne(
         { _id: id as never },
         { $set: { 'progress.stageDetail': `section ${section} (${i}/${sections.length})` } },
       );
-      await extractSection(ctx, section, range);
+      await extractSection(ctx, section, range, { only: open });
     }
     await setStage(db, id, 'extracted', 0);
 
@@ -249,6 +270,7 @@ function makeCtx(
     onDeepseekTokens: (t) => {
       cost.deepseekTokens += t;
     },
+    useDeepseek: CFG.extract.useDeepseek,
   };
 }
 

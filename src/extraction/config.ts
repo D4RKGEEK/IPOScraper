@@ -17,6 +17,10 @@ const Env = z.object({
   FIRECRAWL_API_KEY: z.string().min(1),
   DEEPSEEK_API_KEY: z.string().min(1),
   SERVICE_API_KEY: z.string().min(1),        // X-API-Key protecting the /v1 routes
+  // DeepSeek costs real money; Firecrawl credits don't. Off by default: the
+  // field-extraction ladder is Firecrawl-only unless this is flipped to 'true'.
+  // (The rare L-D section locator still uses DeepSeek regardless — it's cheap.)
+  EXTRACT_USE_DEEPSEEK: z.string().optional().default('false'),
 });
 
 const parsed = Env.safeParse(process.env);
@@ -39,5 +43,6 @@ export const CFG = {
   deepseek: { apiKey: env.DEEPSEEK_API_KEY, base: 'https://api.deepseek.com' },
   apiKey: env.SERVICE_API_KEY,
   budget: { wallMsPerDoc: 600_000, maxAttemptsPerField: 4 },
+  extract: { useDeepseek: env.EXTRACT_USE_DEEPSEEK === 'true' },
   keepOriginalPdf: false,
 } as const;
