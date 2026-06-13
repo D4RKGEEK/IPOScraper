@@ -4,7 +4,7 @@
  * mongo.js — MongoDB connection + collection accessors (native driver).
  *
  * Config (.env): MONGODB_URI (default mongodb://localhost:27017), MONGODB_DB (default "ipo").
- * Collections: ipos, gmp_history, jobs.
+ * Collections: ipos, gmp_history, jobs, extractions, extraction_cache.
  */
 
 const { MongoClient } = require('mongodb');
@@ -41,6 +41,14 @@ async function ensureIndexes(database) {
   const jobs = database.collection('jobs');
   await jobs.createIndex({ createdAt: -1 });
   await jobs.createIndex({ type: 1, status: 1 });
+
+  const extractions = database.collection('extractions');
+  await extractions.createIndex({ ipoSlug: 1, docType: 1, pipeline: 1 }, { unique: true });
+  await extractions.createIndex({ status: 1 });
+
+  const cache = database.collection('extraction_cache');
+  await cache.createIndex({ key: 1 }, { unique: true });
+  await cache.createIndex({ updatedAt: 1 }, { expireAfterSeconds: 7 * 24 * 3600 }); // auto-expire after 7 days
 }
 
 function getDb() {
@@ -52,6 +60,8 @@ const collections = {
   ipos: () => getDb().collection('ipos'),
   gmpHistory: () => getDb().collection('gmp_history'),
   jobs: () => getDb().collection('jobs'),
+  extractions: () => getDb().collection('extractions'),
+  extractionCache: () => getDb().collection('extraction_cache'),
 };
 
 async function close() {

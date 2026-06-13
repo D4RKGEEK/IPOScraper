@@ -4,6 +4,7 @@ data/
 .agent/
 .agents/
 .planning/
+.venv/
 *.tmp
 
 # OS / editor junk

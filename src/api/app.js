@@ -12,6 +12,7 @@ const { collections } = require('../db/mongo');
 const { runScrape, ALL_SOURCES } = require('../services/scrapeService');
 const { runGmp } = require('../services/gmpService');
 const { runHistorical } = require('../services/historicalService');
+const { runExtraction, runBulkExtraction } = require('../extraction');
 const { createJob, appendLog, completeJob, failJob, getJob, listJobs } = require('../db/jobRepository');
 const { logger, requestLogger } = require('../utils/logger');
 
@@ -166,6 +167,34 @@ function buildApp(opts = {}) {
     await runTracked(res, { type: 'historical', params: { status, since, limit } }, (log) => runHistorical({ status, since, limit, log }));
   }));
 
+  // ── Extraction pipeline ──────────────────────────────────────────────────
+
+  // POST /ipos/:slug/extract — extract structured data from this IPO's DRHP/RHP
+  app.post('/ipos/:slug/extract', asyncH(async (req, res) => {
+    const ipo = await findBySlug(req.params.slug);
+    if (!ipo) return res.status(404).json({ error: 'IPO not found', slug: req.params.slug });
+    const { pipeline = 'gemini', docType = 'drhp', force = false, wait = false } = req.body || {};
+    const docUrl = ipo.documents?.[docType]?.url;
+    if (!docUrl) return res.status(400).json({ error: `No ${docType} URL found for this IPO` });
+    await runTracked(res,
+      { type: 'extraction', params: { slug: ipo.slug, docType, pipeline }, longOp: true, wait },
+      (log) => runExtraction(ipo, { pipeline, docType, force, log }));
+  }));
+
+  // POST /ipos/extract — bulk extract all IPOs that have documents
+  app.post('/ipos/extract', asyncH(async (req, res) => {
+    const { pipeline = 'gemini', docType = 'drhp', status, force = false, wait = false } = req.body || {};
+    await runTracked(res,
+      { type: 'extraction-bulk', params: { pipeline, docType, status }, longOp: true, wait },
+      (log) => runBulkExtraction({ pipeline, docType, status, force, log }));
+  }));
+
+  // GET /extractions/:slug — get extraction results for an IPO
+  app.get('/extractions/:slug', asyncH(async (req, res) => {
+    const results = await collections.extractions().find({ ipoSlug: req.params.slug }).toArray();
+    if (!results.length) return res.status(404).json({ error: 'No extractions found', slug: req.params.slug });
+    res.json({ slug: req.params.slug, extractions: results.map((r) => ({ ...r, _id: undefined })) });
+  }));
 
 
   // DELETE /ipos/:slug — remove IPO + its documents

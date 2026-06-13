@@ -1,60 +1,50 @@
 {
   "info": {
-    "name": "IPO Platform API (V2)",
-    "description": "Collection covering the Main API and Extraction API (Port 3001)",
+    "name": "IPO Scraper API",
+    "description": "Complete API collection for the IPO Scraper + Extraction platform",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "http://localhost:3001",
+      "type": "string"
+    }
+  ],
   "item": [
     {
-      "name": "Main API (Port 3001)",
+      "name": "Health & Info",
       "item": [
         {
-          "name": "Health",
+          "name": "Health Check",
           "request": {
             "method": "GET",
-            "url": {
-              "raw": "http://localhost:3001/health",
-              "protocol": "http",
-              "host": [
-                "localhost"
-              ],
-              "port": "3001",
-              "path": [
-                "health"
-              ]
-            }
+            "url": { "raw": "{{base_url}}/health", "host": ["{{base_url}}"], "path": ["health"] }
           }
         },
         {
           "name": "Sources Status",
           "request": {
             "method": "GET",
-            "url": {
-              "raw": "http://localhost:3001/sources",
-              "protocol": "http",
-              "host": [
-                "localhost"
-              ],
-              "port": "3001",
-              "path": [
-                "sources"
-              ]
-            }
+            "url": { "raw": "{{base_url}}/sources", "host": ["{{base_url}}"], "path": ["sources"] }
           }
-        },
+        }
+      ]
+    },
+    {
+      "name": "IPOs",
+      "item": [
         {
           "name": "List IPOs",
           "request": {
             "method": "GET",
             "url": {
-              "raw": "http://localhost:3001/ipos",
-              "protocol": "http",
-              "host": [
-                "localhost"
-              ],
-              "port": "3001",
-              "path": [
-                "ipos"
+              "raw": "{{base_url}}/ipos?status=open&limit=20",
+              "host": ["{{base_url}}"],
+              "path": ["ipos"],
+              "query": [
+                { "key": "status", "value": "open", "description": "Filter: open | upcoming | listed | closed" },
+                { "key": "limit", "value": "20", "description": "Max results (default 50)" }
               ]
             }
           }
@@ -63,174 +53,129 @@
           "name": "Get Single IPO",
           "request": {
             "method": "GET",
+            "url": { "raw": "{{base_url}}/ipos/ola-electric-ipo", "host": ["{{base_url}}"], "path": ["ipos", "ola-electric-ipo"] }
+          }
+        },
+        {
+          "name": "Get IPO (raw sources)",
+          "request": {
+            "method": "GET",
             "url": {
-              "raw": "http://localhost:3001/ipos/ola-electric-ipo",
-              "protocol": "http",
-              "host": [
-                "localhost"
-              ],
-              "port": "3001",
-              "path": [
-                "ipos",
-                "ola-electric-ipo"
-              ]
+              "raw": "{{base_url}}/ipos/ola-electric-ipo?raw=true",
+              "host": ["{{base_url}}"],
+              "path": ["ipos", "ola-electric-ipo"],
+              "query": [{ "key": "raw", "value": "true" }]
             }
           }
         },
         {
-          "name": "Get IPO History (GMP)",
+          "name": "Get IPO History (GMP + Status)",
           "request": {
             "method": "GET",
-            "url": {
-              "raw": "http://localhost:3001/ipos/ola-electric-ipo/history",
-              "protocol": "http",
-              "host": [
-                "localhost"
-              ],
-              "port": "3001",
-              "path": [
-                "ipos",
-                "ola-electric-ipo",
-                "history"
-              ]
-            }
+            "url": { "raw": "{{base_url}}/ipos/ola-electric-ipo/history", "host": ["{{base_url}}"], "path": ["ipos", "ola-electric-ipo", "history"] }
           }
         },
         {
           "name": "Trigger Scrape",
           "request": {
             "method": "POST",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              }
-            ],
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"sources\": [\"nse\", \"groww\", \"upstox\", \"zerodha\"]\n}"
+              "raw": "{\n  \"sources\": [\"nse\", \"groww\", \"upstox\", \"zerodha\"],\n  \"dryRun\": false,\n  \"force\": false\n}"
             },
-            "url": {
-              "raw": "http://localhost:3001/ipos/scrape",
-              "protocol": "http",
-              "host": [
-                "localhost"
-              ],
-              "port": "3001",
-              "path": [
-                "ipos",
-                "scrape"
-              ]
-            }
+            "url": { "raw": "{{base_url}}/ipos/scrape", "host": ["{{base_url}}"], "path": ["ipos", "scrape"] },
+            "description": "Scrape IPO data from all sources. Returns jobId (async). Poll GET /jobs/:id for progress."
           }
         },
         {
           "name": "Trigger GMP Crawl",
           "request": {
             "method": "POST",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              }
-            ],
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
             "body": {
               "mode": "raw",
-              "raw": "{}"
+              "raw": "{\n  \"status\": \"open\"\n}"
             },
-            "url": {
-              "raw": "http://localhost:3001/ipos/gmp",
-              "protocol": "http",
-              "host": [
-                "localhost"
-              ],
-              "port": "3001",
-              "path": [
-                "ipos",
-                "gmp"
-              ]
-            }
+            "url": { "raw": "{{base_url}}/ipos/gmp", "host": ["{{base_url}}"], "path": ["ipos", "gmp"] },
+            "description": "Scrape Grey Market Premium for open/upcoming IPOs."
           }
         },
         {
           "name": "Trigger Historical Prices",
           "request": {
             "method": "POST",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              }
-            ],
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
             "body": {
               "mode": "raw",
               "raw": "{}"
             },
-            "url": {
-              "raw": "http://localhost:3001/ipos/historical",
-              "protocol": "http",
-              "host": [
-                "localhost"
-              ],
-              "port": "3001",
-              "path": [
-                "ipos",
-                "historical"
-              ]
-            }
+            "url": { "raw": "{{base_url}}/ipos/historical", "host": ["{{base_url}}"], "path": ["ipos", "historical"] },
+            "description": "Fetch post-listing price candles for listed IPOs."
           }
         },
         {
-          "name": "Trigger Extraction for IPO",
+          "name": "Extract Single IPO",
           "request": {
             "method": "POST",
-            "header": [],
-            "url": {
-              "raw": "http://localhost:3001/ipos/ola-electric-ipo/extract",
-              "protocol": "http",
-              "host": [
-                "localhost"
-              ],
-              "port": "3001",
-              "path": [
-                "ipos",
-                "ola-electric-ipo",
-                "extract"
-              ]
-            }
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"pipeline\": \"gemini\",\n  \"docType\": \"drhp\",\n  \"force\": false\n}"
+            },
+            "url": { "raw": "{{base_url}}/ipos/ola-electric-ipo/extract", "host": ["{{base_url}}"], "path": ["ipos", "ola-electric-ipo", "extract"] },
+            "description": "Extract structured data from this IPO's DRHP/RHP PDF. Options: pipeline (gemini|firecrawl|both), docType (drhp|rhp), force (re-extract)."
+          }
+        },
+        {
+          "name": "Bulk Extract IPOs",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"pipeline\": \"gemini\",\n  \"docType\": \"drhp\",\n  \"status\": \"open\"\n}"
+            },
+            "url": { "raw": "{{base_url}}/ipos/extract", "host": ["{{base_url}}"], "path": ["ipos", "extract"] },
+            "description": "Bulk extract all IPOs matching the status filter that have document URLs."
           }
         },
         {
           "name": "Delete IPO",
           "request": {
             "method": "DELETE",
-            "url": {
-              "raw": "http://localhost:3001/ipos/ola-electric-ipo",
-              "protocol": "http",
-              "host": [
-                "localhost"
-              ],
-              "port": "3001",
-              "path": [
-                "ipos",
-                "ola-electric-ipo"
-              ]
-            }
+            "url": { "raw": "{{base_url}}/ipos/ola-electric-ipo", "host": ["{{base_url}}"], "path": ["ipos", "ola-electric-ipo"] }
           }
-        },
+        }
+      ]
+    },
+    {
+      "name": "Extraction",
+      "item": [
+        {
+          "name": "Get Extraction Results",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{base_url}}/extractions/ola-electric-ipo", "host": ["{{base_url}}"], "path": ["extractions", "ola-electric-ipo"] },
+            "description": "Get all extraction results for a specific IPO."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Jobs",
+      "item": [
         {
           "name": "List Jobs",
           "request": {
             "method": "GET",
             "url": {
-              "raw": "http://localhost:3001/jobs",
-              "protocol": "http",
-              "host": [
-                "localhost"
-              ],
-              "port": "3001",
-              "path": [
-                "jobs"
+              "raw": "{{base_url}}/jobs?type=extraction&limit=10",
+              "host": ["{{base_url}}"],
+              "path": ["jobs"],
+              "query": [
+                { "key": "type", "value": "extraction", "description": "Filter: scrape | gmp | historical | extraction | extraction-bulk" },
+                { "key": "limit", "value": "10" }
               ]
             }
           }
@@ -239,28 +184,11 @@
           "name": "Get Job Detail",
           "request": {
             "method": "GET",
-            "url": {
-              "raw": "http://localhost:3001/jobs/66bd...1234",
-              "protocol": "http",
-              "host": [
-                "localhost"
-              ],
-              "port": "3001",
-              "path": [
-                "jobs",
-                "66bd...1234"
-              ]
-            }
+            "url": { "raw": "{{base_url}}/jobs/{{job_id}}", "host": ["{{base_url}}"], "path": ["jobs", "{{job_id}}"] },
+            "description": "Get job detail including progress logs. Replace {{job_id}} with an actual job ID."
           }
         }
       ]
-    }
-  ],
-  "variable": [
-    {
-      "key": "api_key",
-      "value": "bc13ad619a09d7679ce0be4260298335141e188a9c146653d84d6ef3229d0d34",
-      "type": "string"
     }
   ]
 }
