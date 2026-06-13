@@ -34,7 +34,7 @@ function normUrl(u) {
   return String(u || '').trim().replace(/\/+$/, '');
 }
 
-/** Build the { drhp, rhp, final } documents map with provenance. */
+/** Build the { drhp, rhp } documents map with provenance. */
 function documentsMap(record) {
   const map = {};
   const push = (docType, url, source) => {
@@ -150,12 +150,12 @@ function toIpoDoc(record, opts = {}) {
 
 // ── Extraction supersession ──────────────────────────────────────────────────
 // An IPO can accumulate several extraction rows (one per docType×pipeline). The
-// authoritative one is the highest-priority document that extracted (final >
-// rhp > drhp). When a better document arrives (e.g. the RHP after the DRHP),
+// authoritative one is the highest-priority document that extracted (rhp >
+// drhp). When a better document arrives (e.g. the RHP after the DRHP),
 // lower-priority rows are marked `superseded` and a single summary is
 // denormalized onto the IPO so consumers have one obvious "live data" pointer.
 
-const DOC_PRIORITY = { final: 3, rhp: 2, drhp: 1 };
+const DOC_PRIORITY = { rhp: 2, drhp: 1 };
 const docPriority = (t) => DOC_PRIORITY[t] || 0;
 
 /**

@@ -12,7 +12,7 @@ const { collections } = require('../db/mongo');
 const { runScrape, ALL_SOURCES } = require('../services/scrapeService');
 const { runGmp } = require('../services/gmpService');
 const { runHistorical } = require('../services/historicalService');
-const { runExtraction, runBulkExtraction } = require('../extraction');
+const { runExtraction, runBulkExtraction, testSchemaOnIpo } = require('../extraction');
 const schemaStore = require('../extraction/llm/schema');
 const sectionConfig = require('../extraction/config');
 const validationStore = require('../extraction/validate');
@@ -21,6 +21,7 @@ const configRepo = require('../db/configRepository');
 const tools = require('../extraction/tools');
 const { createJob, appendLog, completeJob, failJob, getJob, listJobs } = require('../db/jobRepository');
 const { authEnabled, loginHandler, authGuard, DASHBOARD_USER } = require('./auth');
+const { collectSystemMetrics } = require('./metrics');
 const { logger, requestLogger } = require('../utils/logger');
 
 function buildApp(opts = {}) {
@@ -194,6 +195,21 @@ function buildApp(opts = {}) {
     res.json({ ...out, persisted: !!apply });
   }));
 
+  // POST /schema/test — run a CANDIDATE (edited, unsaved) schema against a real
+  // IPO and return the result + validation. Persists nothing. Heavy (one LLM
+  // call) so it runs on the tracked heavy lane. Body: { slug, fields, docType?, pipeline?, wait? }.
+  app.post('/schema/test', asyncH(async (req, res) => {
+    const { slug, fields, docType = 'auto', pipeline = 'gemini', wait = false } = req.body || {};
+    if (!slug) return res.status(400).json({ error: 'slug is required' });
+    try { schemaStore.validateFields(fields); } // fail fast on a bad schema (before spawning a job)
+    catch (e) { return res.status(400).json({ error: e.message }); }
+    const ipo = await findBySlug(slug);
+    if (!ipo) return res.status(404).json({ error: 'IPO not found', slug });
+    await runTracked(res,
+      { type: 'schema-test', params: { slug, docType, pipeline }, longOp: true, wait },
+      (log) => testSchemaOnIpo(ipo, { fields, docType, pipeline, log }));
+  }));
+
   // GET /config/sections — section alias dictionary + which sections are targeted.
   app.get('/config/sections', (_req, res) => {
     res.json({
@@ -319,7 +335,7 @@ function buildApp(opts = {}) {
     const ipos = collections.ipos();
     const safe = async (p, fb) => { try { return await p; } catch { return fb; } };
 
-    const [total, byStatus, bySector, gmpLeaders, docCov, exStatus, exPipeline, jobsRaw] = await Promise.all([
+    const [total, byStatus, bySector, gmpLeaders, docCov, exStatus, exPipeline, jobsRaw, exQuality, exWorst] = await Promise.all([
       safe(ipos.estimatedDocumentCount(), 0),
       safe(ipos.aggregate([{ $group: { _id: '$status', count: { $sum: 1 } } }]).toArray(), []),
       safe(ipos.aggregate([
@@ -336,11 +352,21 @@ function buildApp(opts = {}) {
         _id: null,
         drhp: { $sum: { $cond: [{ $ifNull: ['$documents.drhp.url', false] }, 1, 0] } },
         rhp: { $sum: { $cond: [{ $ifNull: ['$documents.rhp.url', false] }, 1, 0] } },
-        final: { $sum: { $cond: [{ $ifNull: ['$documents.final.url', false] }, 1, 0] } },
       } }]).toArray(), []),
       safe(collections.extractions().aggregate([{ $group: { _id: '$status', count: { $sum: 1 } } }]).toArray(), []),
       safe(collections.extractions().aggregate([{ $group: { _id: '$pipeline', count: { $sum: 1 } } }]).toArray(), []),
       safe(collections.jobs().find({}).sort({ createdAt: -1 }).limit(400).project({ type: 1, status: 1, createdAt: 1 }).toArray(), []),
+      // validation quality: how many are scored + the mean score
+      safe(collections.extractions().aggregate([
+        { $match: { 'validation.score': { $ne: null } } },
+        { $group: { _id: null, scored: { $sum: 1 }, avg: { $avg: '$validation.score' } } },
+      ]).toArray(), []),
+      // worst offenders: lowest-scoring extractions still in the pipeline
+      safe(collections.extractions().aggregate([
+        { $match: { 'validation.score': { $ne: null }, status: { $ne: 'reviewed' } } },
+        { $project: { _id: 0, slug: '$ipoSlug', company: '$result.company_name', score: '$validation.score', status: 1, docType: 1, pipeline: 1 } },
+        { $sort: { score: 1 } }, { $limit: 6 },
+      ]).toArray(), []),
     ]);
 
     const toMap = (rows) => Object.fromEntries(rows.map((d) => [d._id || 'unknown', d.count]));
@@ -349,10 +375,25 @@ function buildApp(opts = {}) {
       byStatus: toMap(byStatus),
       bySector: bySector.map((d) => ({ sector: d._id, count: d.count })),
       gmpLeaders,
-      docCoverage: docCov[0] ? { drhp: docCov[0].drhp, rhp: docCov[0].rhp, final: docCov[0].final } : { drhp: 0, rhp: 0, final: 0 },
-      extractions: { byStatus: toMap(exStatus), byPipeline: toMap(exPipeline) },
+      docCoverage: docCov[0] ? { drhp: docCov[0].drhp, rhp: docCov[0].rhp } : { drhp: 0, rhp: 0 },
+      extractions: {
+        byStatus: toMap(exStatus),
+        byPipeline: toMap(exPipeline),
+        quality: {
+          scored: exQuality[0]?.scored || 0,
+          avgScore: exQuality[0]?.avg != null ? Math.round(exQuality[0].avg) : null,
+          worst: exWorst,
+        },
+      },
       jobs: jobsRaw.map((j) => ({ type: j.type, status: j.status, createdAt: j.createdAt })),
     });
+  }));
+
+  // GET /metrics/system — live host metrics (CPU, memory, disk, network) for
+  // the machine running this process. Reports localhost when run locally and
+  // the server when hit on the deployment. Polled by the dashboard System card.
+  app.get('/metrics/system', asyncH(async (_req, res) => {
+    res.json(await collectSystemMetrics());
   }));
 
   // API 2: GET /ipos/:slug — full details (merged, or ?raw=true)
@@ -418,16 +459,14 @@ function buildApp(opts = {}) {
       pipeline = 'cascade';
     }
 
-    // Auto-pick docType based on priority: final > rhp > drhp
+    // Auto-pick docType based on priority: rhp > drhp
     if (docType === 'auto' || !docType) {
-      if (ipo.documents?.final?.url) {
-        docType = 'final';
-      } else if (ipo.documents?.rhp?.url) {
+      if (ipo.documents?.rhp?.url) {
         docType = 'rhp';
       } else if (ipo.documents?.drhp?.url) {
         docType = 'drhp';
       } else {
-        return res.status(400).json({ error: 'No documents (final, rhp, or drhp) found for this IPO' });
+        return res.status(400).json({ error: 'No documents (rhp or drhp) found for this IPO' });
       }
     } else {
       const docUrl = ipo.documents?.[docType]?.url;
@@ -482,6 +521,8 @@ function buildApp(opts = {}) {
         reviewedAt: r.reviewedAt || null,
         companyName: r.result?.company_name || null,
         score: r.validation?.score ?? null,
+        failedPhase: r.failedPhase || r.lastFailedPhase || null,
+        error: r.error || r.lastError || null,
         usage: r.usage || null,
       })),
     });

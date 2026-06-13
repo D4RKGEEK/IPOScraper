@@ -159,6 +159,51 @@
           </template>
         </div>
 
+        <!-- ═══════ System (live host metrics) ═══════ -->
+        <div class="rounded-xl border bg-card p-5">
+          <div class="flex items-center justify-between mb-4">
+            <div>
+              <h3 class="font-semibold text-sm flex items-center gap-2">
+                <span class="h-2 w-2 rounded-full" :class="sys.at ? 'bg-emerald-500 animate-pulse' : 'bg-muted-foreground/40'"></span>
+                System
+              </h3>
+              <p class="text-xs text-muted-foreground mt-0.5" x-text="sys.host?.hostname ? (sys.host.hostname+' · '+sys.host.platform+'/'+sys.host.arch+' · up '+fmtUptime(sys.host.uptimeSec)) : 'live host metrics'"></p>
+            </div>
+            <span class="text-[10px] text-muted-foreground" x-text="sys.at ? ('updated '+sysAgo+'s ago') : 'connecting…'"></span>
+          </div>
+          <div class="grid grid-cols-2 lg:grid-cols-4 gap-4">
+            <!-- CPU -->
+            <div>
+              <div class="flex items-baseline justify-between"><span class="text-xs text-muted-foreground">CPU</span><span class="text-xs text-muted-foreground" x-text="(sys.cpu?.cores||0)+' cores'"></span></div>
+              <div class="mt-1 text-xl font-bold tabular-nums" x-text="(sys.cpu?.loadPct??0)+'%'"></div>
+              <div class="mt-1.5 h-1.5 rounded-full bg-muted overflow-hidden"><div class="h-full rounded-full transition-all duration-500" :class="barColor(sys.cpu?.loadPct)" :style="'width:'+(sys.cpu?.loadPct||0)+'%'"></div></div>
+            </div>
+            <!-- Memory -->
+            <div>
+              <div class="flex items-baseline justify-between"><span class="text-xs text-muted-foreground">Memory</span><span class="text-xs text-muted-foreground" x-text="(sys.memory?.usedPct??0)+'%'"></span></div>
+              <div class="mt-1 text-xl font-bold tabular-nums" x-text="fmtBytes(sys.memory?.usedBytes)"></div>
+              <div class="text-[11px] text-muted-foreground" x-text="'of '+fmtBytes(sys.memory?.totalBytes)"></div>
+              <div class="mt-1.5 h-1.5 rounded-full bg-muted overflow-hidden"><div class="h-full rounded-full transition-all duration-500" :class="barColor(sys.memory?.usedPct)" :style="'width:'+(sys.memory?.usedPct||0)+'%'"></div></div>
+            </div>
+            <!-- Disk -->
+            <div>
+              <div class="flex items-baseline justify-between"><span class="text-xs text-muted-foreground">Storage</span><span class="text-xs text-muted-foreground" x-text="(sys.disk?.usedPct??0)+'%'"></span></div>
+              <div class="mt-1 text-xl font-bold tabular-nums" x-text="fmtBytes(sys.disk?.usedBytes)"></div>
+              <div class="text-[11px] text-muted-foreground" x-text="'of '+fmtBytes(sys.disk?.totalBytes)+(sys.disk?.mount?' ('+sys.disk.mount+')':'')"></div>
+              <div class="mt-1.5 h-1.5 rounded-full bg-muted overflow-hidden"><div class="h-full rounded-full transition-all duration-500" :class="barColor(sys.disk?.usedPct)" :style="'width:'+(sys.disk?.usedPct||0)+'%'"></div></div>
+            </div>
+            <!-- Network -->
+            <div>
+              <div class="flex items-baseline justify-between"><span class="text-xs text-muted-foreground">Network</span><span class="text-[11px] text-muted-foreground">/sec</span></div>
+              <div class="mt-1 space-y-0.5">
+                <div class="flex items-center gap-1.5 text-sm font-semibold tabular-nums"><span class="text-sky-500">↓</span><span x-text="fmtBytes(sys.network?.rxBytesSec)+'/s'"></span></div>
+                <div class="flex items-center gap-1.5 text-sm font-semibold tabular-nums"><span class="text-emerald-500">↑</span><span x-text="fmtBytes(sys.network?.txBytesSec)+'/s'"></span></div>
+              </div>
+              <div class="text-[11px] text-muted-foreground mt-0.5" x-text="'proc '+fmtBytes(sys.process?.rssBytes)"></div>
+            </div>
+          </div>
+        </div>
+
         <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
           <div class="rounded-xl border bg-card p-5 lg:col-span-1">
             <h3 class="font-semibold text-sm">IPOs by status</h3>
@@ -193,6 +238,37 @@
                 </div>
               </template>
               <div x-show="!stats.gmpLeaders?.length" class="text-xs text-muted-foreground py-6 text-center">No GMP data yet.</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Data quality -->
+        <div class="rounded-xl border bg-card p-5">
+          <div class="flex items-center justify-between mb-3">
+            <div><h3 class="font-semibold text-sm">Extraction quality</h3>
+              <p class="text-xs text-muted-foreground">Validation scores across all extractions</p></div>
+            <button @click="go('validation')" class="text-xs px-2.5 py-1 rounded-md border bg-card hover:bg-accent text-muted-foreground">Edit rules</button>
+          </div>
+          <div class="grid sm:grid-cols-3 gap-4">
+            <div class="flex flex-col items-center justify-center rounded-lg border bg-background p-4">
+              <div class="text-3xl font-bold" :class="stats.extractions?.quality?.avgScore!=null?scoreClass(stats.extractions.quality.avgScore).split(' ').pop():''" x-text="stats.extractions?.quality?.avgScore ?? '—'"></div>
+              <div class="text-xs text-muted-foreground mt-1">avg score · <span x-text="stats.extractions?.quality?.scored||0"></span> scored</div>
+              <div class="text-xs mt-1"><span class="text-amber-500 font-medium" x-text="stats.extractions?.byStatus?.review||0"></span> <span class="text-muted-foreground">need review</span></div>
+            </div>
+            <div class="sm:col-span-2">
+              <div class="text-xs text-muted-foreground mb-1.5">Lowest scoring</div>
+              <div class="space-y-1 max-h-40 overflow-auto scroll-thin">
+                <template x-for="w in (stats.extractions?.quality?.worst||[])" :key="w.slug+w.docType+w.pipeline">
+                  <button @click="viewExtractions(w.slug)" class="w-full flex items-center justify-between text-sm py-1 px-1.5 rounded hover:bg-accent/50 text-left">
+                    <span class="truncate mr-2" x-text="w.company || w.slug"></span>
+                    <span class="flex items-center gap-2 shrink-0">
+                      <span class="text-[10px] text-muted-foreground uppercase" x-text="w.docType"></span>
+                      <span class="text-[11px] px-2 py-0.5 rounded-full border font-medium" :class="scoreClass(w.score)" x-text="w.score"></span>
+                    </span>
+                  </button>
+                </template>
+                <div x-show="!(stats.extractions?.quality?.worst||[]).length" class="text-xs text-muted-foreground py-6 text-center">No scored extractions yet.</div>
+              </div>
             </div>
           </div>
         </div>
@@ -253,6 +329,7 @@
         <div class="flex gap-2 items-center">
           <div class="inline-flex rounded-md border bg-card p-0.5">
             <button @click="exFilter='review';loadExtractions()" :class="exFilter==='review'?'bg-accent text-accent-foreground':'text-muted-foreground'" class="px-3 py-1.5 rounded text-sm font-medium">Review queue</button>
+            <button @click="exFilter='failed';loadExtractions()" :class="exFilter==='failed'?'bg-accent text-accent-foreground':'text-muted-foreground'" class="px-3 py-1.5 rounded text-sm font-medium">Failed</button>
             <button @click="exFilter='';loadExtractions()" :class="exFilter===''?'bg-accent text-accent-foreground':'text-muted-foreground'" class="px-3 py-1.5 rounded text-sm font-medium">All</button>
           </div>
           <span class="text-xs text-muted-foreground" x-text="extractions.length+' shown'"></span>
@@ -269,7 +346,7 @@
                   <td class="uppercase text-xs text-muted-foreground" x-text="e.docType"></td>
                   <td class="text-xs text-muted-foreground" x-text="e.pipeline"></td>
                   <td><span x-show="e.score!=null" class="text-[11px] px-2 py-0.5 rounded-full border font-medium" :class="scoreClass(e.score)" x-text="e.score"></span><span x-show="e.score==null" class="text-xs text-muted-foreground">—</span></td>
-                  <td><span class="text-[11px] px-2 py-0.5 rounded-full border" :class="exStatusClass(e.status)" x-text="e.status"></span></td>
+                  <td><span class="text-[11px] px-2 py-0.5 rounded-full border" :class="exStatusClass(e.status)" :title="e.status==='failed'?('failed at '+(e.failedPhase||'?')+': '+(e.error||'')):''" x-text="e.status + (e.status==='failed'&&e.failedPhase?(' · '+e.failedPhase):'')"></span></td>
                   <td class="text-xs text-muted-foreground" x-text="fmtDate(e.extractedAt)"></td>
                   <td class="text-right pr-4"><button @click="openExtraction(e)" class="text-xs px-2.5 py-1 rounded-md border bg-card hover:bg-accent">Open</button></td>
                 </tr>
@@ -340,6 +417,9 @@
               <button @click="addFieldOpen=true" class="px-3 py-2 rounded-md bg-primary text-primary-foreground text-sm font-medium hover:opacity-90 flex items-center gap-1.5">
                 <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg> Add data
               </button>
+              <button @click="openSchemaTest()" class="px-3 py-2 rounded-md border bg-card text-sm hover:bg-accent flex items-center gap-1.5" title="Try this schema on a real IPO without saving">
+                <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 3v4M3 5h4M6 17v4M4 19h4M13 3l2.4 5.6L21 11l-5.6 2.4L13 19l-2.4-5.6L5 11l5.6-2.4z"/></svg> Test on IPO
+              </button>
               <button @click="saveSchema()" class="px-3 py-2 rounded-md border bg-card text-sm hover:bg-accent" title="Save all changes">Save</button>
             </div>
           </div>
@@ -349,7 +429,38 @@
               <input x-model="schemaSearch" placeholder="Search data points…" class="w-full bg-background border rounded-md pl-8 pr-3 py-1.5 text-sm">
             </div>
             <button @click="schemaJsonMode=!schemaJsonMode" class="px-3 py-1.5 rounded-md border bg-card text-xs hover:bg-accent text-muted-foreground" x-text="schemaJsonMode?'← Simple view':'Advanced (JSON)'"></button>
+            <button @click="openBackups('schema')" class="px-3 py-1.5 rounded-md border bg-card text-xs hover:bg-accent text-muted-foreground">Backups</button>
             <button @click="resetSchema()" class="px-3 py-1.5 rounded-md text-xs text-rose-500 hover:bg-rose-500/10">Reset to default</button>
+          </div>
+        </div>
+
+        <!-- AI assist -->
+        <div class="rounded-xl border bg-card p-4 space-y-2.5">
+          <div class="flex items-center gap-2">
+            <svg class="h-4 w-4 text-primary" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M5.6 18.4l2.1-2.1M16.3 7.7l2.1-2.1"/></svg>
+            <span class="text-sm font-medium">Edit with AI</span>
+            <span class="text-xs text-muted-foreground">describe the change in plain English — the AI proposes it, you review before applying</span>
+          </div>
+          <div class="flex gap-2">
+            <textarea x-model="aiBox.schema.prompt" rows="2" placeholder="e.g. add a field for the company's GST number; remove peer_comparison" class="flex-1 bg-background border rounded-md px-3 py-2 text-sm scroll-thin"></textarea>
+            <button @click="aiEdit('schema')" :disabled="aiBox.schema.busy" class="px-3 py-2 rounded-md bg-primary text-primary-foreground text-sm font-medium hover:opacity-90 disabled:opacity-50 self-stretch flex items-center gap-1.5">
+              <span x-show="aiBox.schema.busy" class="spinner"></span><span x-text="aiBox.schema.busy?'Thinking…':'Ask AI'"></span>
+            </button>
+          </div>
+          <div x-show="aiBox.schema.error" class="text-xs text-rose-500" x-text="aiBox.schema.error"></div>
+          <!-- proposal preview -->
+          <div x-show="aiBox.schema.proposal" class="rounded-lg border bg-background p-3 space-y-2">
+            <p class="text-sm" x-text="aiBox.schema.proposal?.explanation"></p>
+            <div class="flex flex-wrap gap-1.5 text-[11px]">
+              <template x-for="k in (aiBox.schema.proposal?.diff?.added||[])" :key="'a'+k"><span class="px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-600" x-text="'+ '+k"></span></template>
+              <template x-for="k in (aiBox.schema.proposal?.diff?.removed||[])" :key="'r'+k"><span class="px-1.5 py-0.5 rounded bg-rose-500/15 text-rose-600" x-text="'− '+k"></span></template>
+              <template x-for="k in (aiBox.schema.proposal?.diff?.changed||[])" :key="'c'+k"><span class="px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-600" x-text="'~ '+k"></span></template>
+              <span x-show="!aiDiffCount(aiBox.schema)" class="text-muted-foreground">No structural change.</span>
+            </div>
+            <div class="flex gap-2 pt-1">
+              <button @click="applyAiProposal('schema')" class="px-3 py-1.5 rounded-md bg-emerald-600 text-white text-sm">Apply (backup saved)</button>
+              <button @click="aiBox.schema.proposal=null" class="px-3 py-1.5 rounded-md border bg-card text-sm">Discard</button>
+            </div>
           </div>
         </div>
 
@@ -395,6 +506,102 @@
             </div>
           </template>
           <div x-show="!filteredSchemaKeys().length" class="p-8 text-center text-sm text-muted-foreground">No data points match your search.</div>
+        </div>
+      </section>
+
+      <!-- ═══════ VALIDATION EDITOR ═══════ -->
+      <section x-show="page==='validation'" class="space-y-4 max-w-4xl">
+        <div class="rounded-xl border bg-card p-5">
+          <div class="flex items-start gap-4 flex-wrap">
+            <div class="flex-1 min-w-[240px]">
+              <h2 class="font-semibold">Validation rules</h2>
+              <p class="text-sm text-muted-foreground mt-0.5">Each extraction is scored 0–100 against these rules. Below the threshold it's flagged for review. Cross-check rules compare against the scraped master record.</p>
+              <div class="flex gap-4 mt-3 text-sm items-center">
+                <span><span class="font-semibold" x-text="valDraft.rules.length"></span> <span class="text-muted-foreground">rules</span></span>
+                <label class="flex items-center gap-1.5 text-muted-foreground">review below
+                  <input type="number" min="0" max="100" x-model.number="valDraft.threshold" class="w-16 bg-background border rounded-md px-2 py-1 text-sm text-foreground"></label>
+              </div>
+            </div>
+            <div class="flex gap-2">
+              <button @click="addValRule()" class="px-3 py-2 rounded-md bg-primary text-primary-foreground text-sm font-medium hover:opacity-90 flex items-center gap-1.5">
+                <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg> Add rule
+              </button>
+              <button @click="saveValidation()" class="px-3 py-2 rounded-md border bg-card text-sm hover:bg-accent">Save</button>
+            </div>
+          </div>
+          <div class="flex items-center gap-2 mt-4 flex-wrap">
+            <div class="relative flex-1 min-w-[200px]">
+              <svg class="h-4 w-4 absolute left-2.5 top-2.5 text-muted-foreground" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+              <input x-model="valSearch" placeholder="Search rules…" class="w-full bg-background border rounded-md pl-8 pr-3 py-1.5 text-sm">
+            </div>
+            <button @click="valJsonMode=!valJsonMode" class="px-3 py-1.5 rounded-md border bg-card text-xs hover:bg-accent text-muted-foreground" x-text="valJsonMode?'← Simple view':'Advanced (JSON)'"></button>
+            <button @click="openBackups('validation')" class="px-3 py-1.5 rounded-md border bg-card text-xs hover:bg-accent text-muted-foreground">Backups</button>
+            <button @click="resetValidation()" class="px-3 py-1.5 rounded-md text-xs text-rose-500 hover:bg-rose-500/10">Reset to default</button>
+          </div>
+        </div>
+
+        <!-- AI assist -->
+        <div class="rounded-xl border bg-card p-4 space-y-2.5">
+          <div class="flex items-center gap-2">
+            <svg class="h-4 w-4 text-primary" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M5.6 18.4l2.1-2.1M16.3 7.7l2.1-2.1"/></svg>
+            <span class="text-sm font-medium">Edit with AI</span>
+            <span class="text-xs text-muted-foreground">tell it what to validate, stricter or looser — review before applying</span>
+          </div>
+          <div class="flex gap-2">
+            <textarea x-model="aiBox.validation.prompt" rows="2" placeholder="e.g. require at least 5 risk factors and make lot_size an error; add a rule that listing_date is a valid date" class="flex-1 bg-background border rounded-md px-3 py-2 text-sm scroll-thin"></textarea>
+            <button @click="aiEdit('validation')" :disabled="aiBox.validation.busy" class="px-3 py-2 rounded-md bg-primary text-primary-foreground text-sm font-medium hover:opacity-90 disabled:opacity-50 self-stretch flex items-center gap-1.5">
+              <span x-show="aiBox.validation.busy" class="spinner"></span><span x-text="aiBox.validation.busy?'Thinking…':'Ask AI'"></span>
+            </button>
+          </div>
+          <div x-show="aiBox.validation.error" class="text-xs text-rose-500" x-text="aiBox.validation.error"></div>
+          <div x-show="aiBox.validation.proposal" class="rounded-lg border bg-background p-3 space-y-2">
+            <p class="text-sm" x-text="aiBox.validation.proposal?.explanation"></p>
+            <div class="flex flex-wrap gap-1.5 text-[11px]">
+              <template x-for="k in (aiBox.validation.proposal?.diff?.added||[])" :key="'a'+k"><span class="px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-600" x-text="'+ '+k"></span></template>
+              <template x-for="k in (aiBox.validation.proposal?.diff?.removed||[])" :key="'r'+k"><span class="px-1.5 py-0.5 rounded bg-rose-500/15 text-rose-600" x-text="'− '+k"></span></template>
+              <template x-for="k in (aiBox.validation.proposal?.diff?.changed||[])" :key="'c'+k"><span class="px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-600" x-text="'~ '+k"></span></template>
+              <span x-show="!aiDiffCount(aiBox.validation)" class="text-muted-foreground">No rule added/removed.</span>
+            </div>
+            <div x-show="(aiBox.validation.proposal?.warnings||[]).length" class="text-[11px] text-amber-600 space-y-0.5">
+              <template x-for="w in (aiBox.validation.proposal?.warnings||[])" :key="w"><div x-text="'⚠ '+w"></div></template>
+            </div>
+            <div class="text-[11px] text-muted-foreground" x-text="'threshold → '+(aiBox.validation.proposal?.threshold)"></div>
+            <div class="flex gap-2 pt-1">
+              <button @click="applyAiProposal('validation')" class="px-3 py-1.5 rounded-md bg-emerald-600 text-white text-sm">Apply (backup saved)</button>
+              <button @click="aiBox.validation.proposal=null" class="px-3 py-1.5 rounded-md border bg-card text-sm">Discard</button>
+            </div>
+          </div>
+        </div>
+
+        <div x-show="valJsonMode" class="rounded-xl border bg-card p-3">
+          <textarea x-model="valJsonText" rows="24" class="w-full bg-background border rounded-md p-3 font-mono text-xs scroll-thin" spellcheck="false"></textarea>
+          <p class="text-xs text-muted-foreground mt-2">Full ruleset as JSON. Save validates server-side.</p>
+        </div>
+
+        <div x-show="!valJsonMode" class="rounded-xl border bg-card divide-y">
+          <template x-for="({r,i}) in filteredValRules()" :key="r.id+i">
+            <div class="p-4 space-y-2">
+              <div class="flex items-center gap-2 flex-wrap">
+                <input x-model="r.id" class="font-mono text-xs bg-background border rounded-md px-2 py-1 w-40" placeholder="rule_id">
+                <span class="text-muted-foreground text-xs">on</span>
+                <input x-model="r.field" class="font-mono text-xs bg-background border rounded-md px-2 py-1 w-40" placeholder="field">
+                <label class="flex items-center gap-1 text-xs text-muted-foreground ml-auto"><input type="checkbox" x-model="r.enabled" class="accent-primary"> on</label>
+                <button @click="delValRule(i)" class="text-muted-foreground hover:text-rose-500 text-xs px-1">✕</button>
+              </div>
+              <div class="flex items-center gap-2 flex-wrap">
+                <select x-model="r.type" class="bg-background border rounded-md px-2 py-1 text-xs"><template x-for="t in Object.keys(validation.ruleTypes||{})" :key="t"><option :value="t" x-text="t"></option></template></select>
+                <select x-model="r.severity" class="bg-background border rounded-md px-2 py-1 text-xs" :class="sevClass(r.severity)"><template x-for="s in severities" :key="s"><option :value="s" x-text="s"></option></template></select>
+                <label class="flex items-center gap-1 text-xs text-muted-foreground">weight <input type="number" min="0" x-model.number="r.weight" class="w-16 bg-background border rounded-md px-2 py-1 text-foreground"></label>
+                <span class="text-[10px] text-muted-foreground" x-text="(validation.ruleTypes?.[r.type]?.note)||''"></span>
+              </div>
+              <div class="flex items-center gap-2" x-show="valTypeParams(r.type).length">
+                <span class="text-[11px] text-muted-foreground w-12">params</span>
+                <input :value="JSON.stringify(r.params||{})" @change="try{ r.params=JSON.parse($event.target.value||'{}'); }catch(e){ notify('Bad params JSON',true); }" class="flex-1 font-mono text-xs bg-background border rounded-md px-2 py-1" placeholder='params as JSON, e.g. { "min": 3 }'>
+              </div>
+              <input x-model="r.description" placeholder="what this checks (shown in review)" class="w-full bg-background border rounded-md px-2.5 py-1.5 text-xs">
+            </div>
+          </template>
+          <div x-show="!filteredValRules().length" class="p-8 text-center text-sm text-muted-foreground">No rules match.</div>
         </div>
       </section>
 
@@ -615,6 +822,90 @@
     <div :class="toast.err?'border-rose-500/40 text-rose-500':'border-emerald-500/40 text-emerald-600'" class="bg-popover border rounded-lg shadow-lg px-4 py-2.5 text-sm max-w-md" x-text="toast.msg"></div>
   </div>
 
+  <!-- ════════════ BACKUPS MODAL ════════════ -->
+  <div x-show="backups.open" x-transition.opacity class="fixed inset-0 bg-black/50 z-50 grid place-items-center p-4" @click.self="backups.open=false">
+    <div class="bg-card rounded-xl border shadow-xl w-full max-w-lg max-h-[80vh] flex flex-col">
+      <div class="flex justify-between items-center p-4 border-b">
+        <div><h3 class="font-semibold" x-text="prettyKey(backups.key)+' backups'"></h3>
+          <p class="text-xs text-muted-foreground">Each save (manual or AI) snapshots the previous version. Restore rolls back — your current config is backed up first.</p></div>
+        <button @click="backups.open=false" class="text-muted-foreground hover:text-foreground text-2xl leading-none">×</button>
+      </div>
+      <div class="p-3 overflow-auto scroll-thin divide-y">
+        <template x-for="b in backups.items" :key="b.id">
+          <div class="flex items-center gap-3 py-2.5">
+            <div class="flex-1 min-w-0">
+              <div class="text-sm" x-text="backupSummary(b)"></div>
+              <div class="text-xs text-muted-foreground"><span x-text="fmtDate(b.createdAt)"></span> · <span x-text="b.reason"></span></div>
+            </div>
+            <button @click="doRestore(b.id)" class="text-xs px-2.5 py-1 rounded-md border bg-card hover:bg-accent shrink-0">Restore</button>
+          </div>
+        </template>
+        <div x-show="!backups.items.length" class="py-8 text-center text-sm text-muted-foreground">No backups yet — they appear after your first edit.</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ════════════ SCHEMA TEST MODAL ════════════ -->
+  <div x-show="schemaTest.open" x-transition.opacity class="fixed inset-0 bg-black/50 z-50 flex justify-center items-start overflow-auto py-8 p-4" @click.self="schemaTest.open=false">
+    <div class="bg-card rounded-xl border shadow-xl w-full max-w-3xl">
+      <div class="flex justify-between items-center p-4 border-b">
+        <div><h3 class="font-semibold">Test schema on an IPO</h3>
+          <p class="text-xs text-muted-foreground">Runs your current (unsaved) schema against one IPO's document. Nothing is saved.</p></div>
+        <button @click="schemaTest.open=false" class="text-muted-foreground hover:text-foreground text-2xl leading-none">×</button>
+      </div>
+      <div class="p-4 space-y-3">
+        <div class="flex gap-2 flex-wrap items-center">
+          <div class="relative flex-1 min-w-[200px]">
+            <input x-model="schemaTest.search" @input.debounce.300ms="schemaTestSearch()" placeholder="Search an IPO with a document…" class="w-full bg-background border rounded-md px-3 py-2 text-sm">
+            <div x-show="schemaTest.results.length && !schemaTest.slug" class="absolute z-30 mt-1 w-full bg-popover border rounded-md shadow-lg max-h-60 overflow-auto scroll-thin">
+              <template x-for="r in schemaTest.results" :key="r.slug">
+                <button @click="schemaTestPick(r)" class="w-full text-left px-3 py-2 text-sm hover:bg-accent" x-text="r.companyName||r.slug"></button>
+              </template>
+            </div>
+          </div>
+          <select x-model="schemaTest.docType" class="bg-background border rounded-md px-2 py-2 text-sm"><option value="auto">auto doc</option><option value="rhp">rhp</option><option value="drhp">drhp</option></select>
+          <select x-model="schemaTest.pipeline" class="bg-background border rounded-md px-2 py-2 text-sm"><option value="gemini">gemini</option><option value="firecrawl">firecrawl</option></select>
+          <button @click="runSchemaTest()" :disabled="!schemaTest.slug || schemaTest.job?.status==='running'" class="px-3 py-2 rounded-md bg-primary text-primary-foreground text-sm font-medium hover:opacity-90 disabled:opacity-50">Run test</button>
+        </div>
+
+        <!-- running -->
+        <div x-show="schemaTest.job?.status==='running'" class="bg-zinc-950 text-zinc-100 rounded-lg p-3 font-mono text-xs max-h-40 overflow-auto scroll-thin space-y-0.5">
+          <template x-for="(l,i) in (schemaTest.job?.logs||[])" :key="i"><div :class="logClass(l.msg)" x-text="l.msg"></div></template>
+          <div class="flex items-center gap-1.5 text-zinc-500"><span class="live-dot">▍</span><span>running…</span></div>
+        </div>
+        <div x-show="schemaTest.job?.error" class="text-rose-500 text-sm" x-text="schemaTest.job?.error"></div>
+
+        <!-- result -->
+        <template x-if="schemaTest.job?.status==='completed' && schemaTest.job?.result">
+          <div class="space-y-3">
+            <div class="flex items-center gap-2 text-sm">
+              <span class="px-2 py-0.5 rounded-full border font-medium" :class="scoreClass(schemaTest.job.result.validation?.score)" x-text="'score '+(schemaTest.job.result.validation?.score)+'/100'"></span>
+              <span class="text-xs text-muted-foreground" x-text="(schemaTest.job.result.fieldCount)+' fields · '+(schemaTest.job.result.usedCache?'cached markdown':'fresh convert')+' · '+schemaTest.job.result.pipeline"></span>
+            </div>
+            <div class="rounded-lg border divide-y max-h-[50vh] overflow-auto scroll-thin">
+              <template x-for="key in Object.keys(schemaTest.job.result.result||{})" :key="key">
+                <div class="grid grid-cols-3 gap-3 p-2.5 items-start text-sm">
+                  <div class="text-xs"><div class="font-medium font-mono" x-text="key"></div></div>
+                  <div class="col-span-2">
+                    <template x-if="Array.isArray(schemaTest.job.result.result[key])">
+                      <div>
+                        <template x-if="schemaTest.job.result.result[key].length && typeof schemaTest.job.result.result[key][0]==='object'">
+                          <div class="text-xs text-muted-foreground" x-text="schemaTest.job.result.result[key].length+' row(s)'"></div>
+                        </template>
+                        <ul x-show="!schemaTest.job.result.result[key].length || typeof schemaTest.job.result.result[key][0]!=='object'" class="list-disc ml-4"><template x-for="(it,i) in schemaTest.job.result.result[key]" :key="i"><li x-text="it"></li></template></ul>
+                      </div>
+                    </template>
+                    <span x-show="!Array.isArray(schemaTest.job.result.result[key])" :class="isEmpty(schemaTest.job.result.result[key])?'text-muted-foreground italic':''" x-text="display(schemaTest.job.result.result[key])"></span>
+                  </div>
+                </div>
+              </template>
+            </div>
+          </div>
+        </template>
+      </div>
+    </div>
+  </div>
+
   <!-- ════════════ IPO DRAWER ════════════ -->
   <div x-show="ipoDetail" x-transition.opacity class="fixed inset-0 bg-black/50 z-40 flex justify-end" @click.self="ipoDetail=null">
     <div class="bg-card w-full max-w-2xl h-full overflow-auto scroll-thin border-l p-6">
@@ -671,6 +962,19 @@
             <button x-show="exView.status==='review'" @click="resolveReview()" class="px-3 py-1.5 rounded-md bg-amber-500 text-white text-sm">Mark reviewed</button>
             <button @click="exView=null;editing=false" class="text-muted-foreground hover:text-foreground text-2xl leading-none">×</button>
           </div>
+        </div>
+        <!-- failure panel -->
+        <div x-show="exView.status==='failed' || exView.lastError" class="px-4 py-3 border-b bg-rose-500/5 space-y-1.5">
+          <div class="flex items-center gap-2 text-sm text-rose-600">
+            <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 9v4M12 17h.01M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/></svg>
+            <span class="font-medium" x-text="'Failed at: '+(exView.failedPhase||exView.lastFailedPhase||'?')"></span>
+          </div>
+          <div class="text-xs text-rose-600/90 font-mono" x-text="exView.error||exView.lastError"></div>
+          <div x-show="exView.partial?.engineErrors && Object.keys(exView.partial.engineErrors).length || exView.engineErrors && Object.keys(exView.engineErrors).length" class="text-[11px] text-muted-foreground space-y-0.5 pt-1">
+            <template x-for="[eng,msg] in Object.entries(exView.partial?.engineErrors||exView.engineErrors||{})" :key="eng"><div><span class="font-medium" x-text="eng"></span>: <span x-text="msg"></span></div></template>
+          </div>
+          <div x-show="exView.partial?.converted?.length" class="text-[11px] text-muted-foreground" x-text="'partial: converted '+(exView.partial?.converted||[]).length+' section(s) before failing'"></div>
+          <div x-show="exView.result" class="text-[11px] text-amber-600">A previous successful result is still shown below.</div>
         </div>
         <!-- validation findings -->
         <div x-show="exView.validation" class="px-4 py-3 border-b bg-muted/30 space-y-2">
@@ -784,6 +1088,7 @@ function app() {
     stats: { byStatus:{}, bySector:[], gmpLeaders:[], docCoverage:{}, extractions:{byStatus:{},byPipeline:{}}, jobs:[] },
     kpi: { ipos:0, openUpcoming:0, extractions:0, review:0 },
     charts: {},
+    sys: {}, sysAgo: 0,   // live host metrics + seconds-since-update counter
 
     ipos: [], pagination:{page:1,total:0,hasMore:false}, ipoFilters:{search:'',status:'',document:'',sort:'latest'}, ipoDetail:null,
     extractForm: null,
@@ -802,6 +1107,10 @@ function app() {
     severities:['error','warning','info'],
     // AI-assisted config editing (shared by schema + validation editors)
     aiBox:{ schema:{prompt:'',busy:false,proposal:null,error:''}, validation:{prompt:'',busy:false,proposal:null,error:''} },
+    // config backups / restore
+    backups:{ open:false, key:'', items:[] },
+    // schema "test on an IPO" (runs the edited, unsaved schema; saves nothing)
+    schemaTest:{ open:false, search:'', results:[], slug:'', companyName:'', docType:'auto', pipeline:'gemini', job:null, _poll:null },
     // sections editor
     sectionDraft:{aliases:{},targets:[]}, addSectionOpen:false, newSection:{key:'',aliases:'',target:true}, sectionSearch:'',
     // pdf lab
@@ -832,6 +1141,11 @@ function app() {
       await this.loadSchema();
       await this.refreshAll();
       if (!this._tick) this._tick = setInterval(() => { if (this.jobAutoRefresh) this.tickJobs(); }, 4000);
+      // Live host metrics: poll every 3s while the Overview is open; tick the
+      // "updated Ns ago" label every second so it always reads fresh.
+      this.loadMetrics();
+      if (!this._sysTick) this._sysTick = setInterval(() => { if (this.page==='overview') this.loadMetrics(); }, 3000);
+      if (!this._agoTick) this._agoTick = setInterval(() => { if (this.sys.at) this.sysAgo++; }, 1000);
       this.$watch('schemaJsonMode', v => { if (v) this.schemaJsonText = JSON.stringify(this.schemaDraft, null, 2); else { try { this.schemaDraft = JSON.parse(this.schemaJsonText); } catch (e) { this.notify('Invalid JSON: ' + e.message, true); } } });
       this.$watch('valJsonMode', v => { if (v) this.valJsonText = JSON.stringify(this.valDraft.rules, null, 2); else { try { this.valDraft.rules = JSON.parse(this.valJsonText); } catch (e) { this.notify('Invalid JSON: ' + e.message, true); } } });
     },
@@ -852,7 +1166,7 @@ function app() {
 
     pageTitle(){ for(const g of this.nav) for(const i of g.items) if(i.id===this.page) return i.label; return ''; },
     go(id){ this.page=id;
-      if(id==='overview'){ this.loadStats(); }
+      if(id==='overview'){ this.loadStats(); this.loadMetrics(); }
       if(id==='schema'){ this.schemaDraft=JSON.parse(JSON.stringify(this.schema)); }
       if(id==='validation'){ this.loadValidation(); }
       if(id==='sections'){ this.loadSections(); }
@@ -865,6 +1179,10 @@ function app() {
     notify(msg,err=false){ this.toast={msg,err}; setTimeout(()=>this.toast={msg:'',err:false},3800); },
 
     async loadHealth(){ try{ this.health={ok:true,...(await this.api('/health'))}; this.kpi.ipos=this.health.ipos; }catch{ this.health={ok:false,ipos:null}; } },
+    async loadMetrics(){ try{ this.sys=await this.api('/metrics/system'); this.sysAgo=0; }catch{ /* transient; keep last snapshot */ } },
+    fmtBytes(n){ if(n==null||!isFinite(n)) return '—'; if(n<1024) return n+' B'; const u=['KB','MB','GB','TB']; let i=-1; do{ n/=1024; i++; }while(n>=1024&&i<u.length-1); return (n<10?n.toFixed(1):Math.round(n))+' '+u[i]; },
+    fmtUptime(s){ if(!s) return '—'; const d=Math.floor(s/86400),h=Math.floor(s%86400/3600),m=Math.floor(s%3600/60); return d?`${d}d ${h}h`:h?`${h}h ${m}m`:`${m}m`; },
+    barColor(p){ return p>=90?'bg-red-500':p>=70?'bg-amber-500':'bg-emerald-500'; },
     async loadSchema(){ const s=await this.api('/schema'); this.schema=s.fields; this.schemaKeys=Object.keys(s.fields); this.defaultValue=s.defaultValue; },
 
     async loadStats(){
@@ -933,11 +1251,11 @@ function app() {
       const dc=this.stats.docCoverage||{};
       this.mkChart('chDocs',{
         chart:{ type:'bar' }, legend:{ enabled:false },
-        xAxis:{ ...axis(), categories:['DRHP','RHP','Final'] },
+        xAxis:{ ...axis(), categories:['DRHP','RHP'] },
         yAxis:{ ...axis(), allowDecimals:false },
         plotOptions:{ bar:{ borderRadius:4, borderWidth:0, colorByPoint:true } },
-        colors:['#06b6d4','#a855f7','#22c55e'],
-        series:[{ name:'IPOs', data:[dc.drhp||0, dc.rhp||0, dc.final||0] }],
+        colors:['#06b6d4','#a855f7'],
+        series:[{ name:'IPOs', data:[dc.drhp||0, dc.rhp||0] }],
       });
 
       const pl=this.stats.extractions?.byPipeline||{};
@@ -998,6 +1316,13 @@ function app() {
     async saveSchema(){ try{ const fields=this.schemaJsonMode?JSON.parse(this.schemaJsonText):this.schemaDraft; const r=await this.api('/schema',{method:'PUT',headers:{'content-type':'application/json'},body:JSON.stringify({fields})}); this.schema=r.fields; this.schemaKeys=Object.keys(r.fields); this.schemaDraft=JSON.parse(JSON.stringify(r.fields)); this.notify('Schema saved ('+this.schemaKeys.length+' fields)'); }catch(e){ this.notify(e.message,true); } },
     async resetSchema(){ if(!confirm('Reset schema to built-in default?')) return; try{ const r=await this.api('/schema/reset',{method:'POST'}); this.schema=r.fields; this.schemaKeys=Object.keys(r.fields); this.schemaDraft=JSON.parse(JSON.stringify(r.fields)); this.notify('Schema reset'); }catch(e){ this.notify(e.message,true); } },
 
+    // ── SCHEMA "TEST ON AN IPO" (runs the edited draft, saves nothing) ──
+    openSchemaTest(){ this.schemaTest.open=true; this.schemaTest.job=null; this.schemaTest.slug=''; this.schemaTest.search=''; this.schemaTest.results=[]; },
+    async schemaTestSearch(){ if(!this.schemaTest.search){ this.schemaTest.results=[]; return; } if(this.schemaTest.slug && this.schemaTest.search===this.schemaTest.companyName) return; try{ const r=await this.api('/ipos?limit=8&search='+encodeURIComponent(this.schemaTest.search)); this.schemaTest.results=r.data.filter(d=>Object.keys(d.documents||{}).length); }catch(e){} },
+    schemaTestPick(r){ this.schemaTest.slug=r.slug; this.schemaTest.companyName=r.companyName||r.slug; this.schemaTest.search=this.schemaTest.companyName; this.schemaTest.results=[]; },
+    async runSchemaTest(){ if(!this.schemaTest.slug){ this.notify('pick an IPO first',true); return; } const fields=this.schemaJsonMode?(()=>{try{return JSON.parse(this.schemaJsonText);}catch(e){this.notify('Invalid JSON',true);return null;}})():this.schemaDraft; if(!fields) return; try{ const r=await this.api('/schema/test',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({slug:this.schemaTest.slug,docType:this.schemaTest.docType,pipeline:this.schemaTest.pipeline,fields})}); this.schemaTest.job={jobId:r.jobId,status:'running',logs:[]}; this.pollSchemaTest(r.jobId); }catch(e){ this.notify(e.message,true); } },
+    pollSchemaTest(id){ clearTimeout(this.schemaTest._poll); const step=async()=>{ try{ const j=await this.api('/jobs/'+id); this.schemaTest.job=j; if(j.status==='running'){ this.schemaTest._poll=setTimeout(step,2000); } else if(j.status==='failed'){ this.notify('Test failed: '+j.error,true); } }catch(e){} }; step(); },
+
     // ── VALIDATION EDITOR ──
     async loadValidation(){ try{ const r=await this.api('/validation'); this.validation=r; this.valDraft={rules:JSON.parse(JSON.stringify(r.rules)),threshold:r.threshold}; }catch(e){ this.notify(e.message,true); } },
     valTypeParams(t){ return (this.validation.ruleTypes?.[t]?.params)||[]; },
@@ -1011,6 +1336,11 @@ function app() {
     async aiEdit(target){ const box=this.aiBox[target]; if(!box.prompt.trim()){ this.notify('Type what you want changed',true); return; } box.busy=true; box.proposal=null; box.error=''; try{ const r=await this.api('/'+target+'/ai',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({instruction:box.prompt})}); box.proposal=r; }catch(e){ box.error=e.message; } finally{ box.busy=false; } },
     async applyAiProposal(target){ const box=this.aiBox[target]; if(!box.proposal) return; try{ if(target==='schema'){ const r=await this.api('/schema',{method:'PUT',headers:{'content-type':'application/json'},body:JSON.stringify({fields:box.proposal.proposed})}); this.schema=r.fields; this.schemaKeys=Object.keys(r.fields); this.schemaDraft=JSON.parse(JSON.stringify(r.fields)); } else { const r=await this.api('/validation',{method:'PUT',headers:{'content-type':'application/json'},body:JSON.stringify({rules:box.proposal.proposed,threshold:box.proposal.threshold})}); this.validation={...this.validation,rules:r.rules,threshold:r.threshold}; this.valDraft={rules:JSON.parse(JSON.stringify(r.rules)),threshold:r.threshold}; } this.notify('AI changes applied (backup saved)'); box.proposal=null; box.prompt=''; }catch(e){ this.notify(e.message,true); } },
     aiDiffCount(box){ const d=box.proposal?.diff||{}; return (d.added?.length||0)+(d.removed?.length||0)+(d.changed?.length||0); },
+
+    // ── CONFIG BACKUPS / RESTORE ──
+    async openBackups(key){ this.backups.key=key; this.backups.open=true; this.backups.items=[]; try{ const r=await this.api('/config/backups?key='+key); this.backups.items=r.backups; }catch(e){ this.notify(e.message,true); } },
+    backupSummary(b){ const s=b.summary||{}; if(b.key==='validation') return (s.rules??'?')+' rules · threshold '+(s.threshold??'?'); if(b.key==='schema') return (s.fields??'?')+' fields'; return (s.targets??'?')+' target sections'; },
+    async doRestore(id){ if(!confirm('Restore this snapshot? Your current config is backed up first.')) return; try{ await this.api('/config/backups/'+id+'/restore',{method:'POST'}); this.notify('Restored'); this.backups.open=false; const k=this.backups.key; if(k==='schema'){ await this.loadSchema(); this.schemaDraft=JSON.parse(JSON.stringify(this.schema)); } else if(k==='validation'){ await this.loadValidation(); } else if(k==='sections'){ await this.loadSections(); } }catch(e){ this.notify(e.message,true); } },
 
     // ── SECTIONS EDITOR ──
     async loadSections(){ try{ const r=await this.api('/config/sections'); this.sectionDraft={aliases:JSON.parse(JSON.stringify(r.aliases)),targets:[...r.targets]}; }catch(e){ this.notify(e.message,true); } },

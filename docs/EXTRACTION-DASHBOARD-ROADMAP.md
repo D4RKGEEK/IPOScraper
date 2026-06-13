@@ -41,17 +41,23 @@ extraction 0–100 and auto-flag low scores as `pending_review`.
   `config_backups` (last 25/key). `GET /config/backups?key=`, `POST /config/backups/:id/restore`.
   `configRepository.backupConfig/listBackups/restoreBackup`.
 
-## Phase 2 — Dashboard: validation editor + review ⬜
+## Phase 2 — Dashboard: validation editor + review ✅
 
-- Validation rules editor page (like the Schema editor): list/add/edit/delete/enable,
-  edit threshold, reset to defaults; per-type param inputs from `GET /validation` `ruleTypes`.
-- **AI-assist box on BOTH the schema and validation editors**: paste a freeform
-  instruction → call `POST /schema/ai` / `POST /validation/ai` → show explanation +
-  diff + warnings → Apply (or Refine). Backend done (Phase 1b); this is the UI.
-- **Backups/restore UI**: list `GET /config/backups`, one-click restore.
-- Extractions review view: score badge, per-rule findings (red/yellow), expected-vs-actual
-  for cross-checks, `pending_review` queue filter, "Re-validate" button.
-- Data-quality widget on the overview (counts by validation status, worst offenders).
+All in `src/api/public/dashboard.html` (single Alpine.js app).
+
+- ✅ **2a — Validation review view**: Score column on the Extractions table; score
+  badge + per-rule findings panel (red/amber, expected-vs-actual on hover) + a
+  **Re-validate** button (no-LLM re-score) in the extraction modal.
+- ✅ **2b — AI-assist box on BOTH the schema and validation editors**: freeform
+  instruction → `POST /schema/ai` / `POST /validation/ai` → explanation + diff +
+  warnings preview → Apply (auto-backup) or Discard. New **Validation** nav page
+  with a rules editor (id/field/type/severity/weight/enabled/params), threshold,
+  JSON mode, reset.
+- ✅ **2c — Backups/restore UI**: "Backups" button on the schema + validation
+  editors → modal listing snapshots (`GET /config/backups?key=`) with one-click
+  restore (`POST /config/backups/:id/restore`).
+- ✅ **2d — Data-quality widget** on the overview: avg score, scored count, needs-review
+  count, and a clickable "lowest scoring" list (from `/stats` `extractions.quality`).
   *(covers Dashboard #5)*
 
 ## Phase 3 — Schema "test on an IPO" ⬜  *(Extraction #6)*

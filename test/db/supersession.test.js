@@ -6,8 +6,7 @@ const { reconcileExtractionState, docPriority } = require('../../src/db/ipoModel
 const { serializeMergedMarkdown, splitMergedMarkdown } = require('../../src/extraction/markdown.js');
 
 describe('docPriority', () => {
-  it('orders final > rhp > drhp > unknown', () => {
-    expect(docPriority('final')).toBeGreaterThan(docPriority('rhp'));
+  it('orders rhp > drhp > unknown', () => {
     expect(docPriority('rhp')).toBeGreaterThan(docPriority('drhp'));
     expect(docPriority('drhp')).toBeGreaterThan(docPriority('whatever'));
   });
@@ -49,17 +48,6 @@ describe('reconcileExtractionState', () => {
     expect(s.currentDocType).toBe('drhp');
     expect(s.supersededDocTypes).toEqual([]);
     expect(s.rows.find((r) => r.docType === 'drhp').superseded).toBe(false);
-  });
-
-  it('final supersedes both rhp and drhp', () => {
-    const rows = [
-      { docType: 'drhp', pipeline: 'cascade', status: 'completed', validation: { score: 80 }, extractedAt: '2026-01-01' },
-      { docType: 'rhp', pipeline: 'cascade', status: 'completed', validation: { score: 90 }, extractedAt: '2026-02-01' },
-      { docType: 'final', pipeline: 'cascade', status: 'completed', validation: { score: 99 }, extractedAt: '2026-03-01' },
-    ];
-    const s = reconcileExtractionState(rows);
-    expect(s.currentDocType).toBe('final');
-    expect(new Set(s.supersededDocTypes)).toEqual(new Set(['drhp', 'rhp']));
   });
 
   it('prefers completed over review within the same docType', () => {

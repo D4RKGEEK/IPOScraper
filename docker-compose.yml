@@ -15,9 +15,10 @@ services:
       NODE_ENV: production
       PORT: 3001
     ports:
-      # host:container — serve directly on port 80. Swap for "3001:3001" if you
-      # put Caddy/nginx in front for HTTPS (see docs/deploy-digitalocean.md).
-      - "80:3001"
+      # host:container — published on 1234 (port 80 was already in use on the box).
+      # Reachable at http://geekvb.xyz:1234 since DNS points at this server.
+      # Swap for "3001:3001" if you put Caddy/nginx in front for HTTPS later.
+      - "1234:3001"
     healthcheck:
       # Node 22 has global fetch, so no curl/wget dependency needed.
       test: ["CMD", "node", "-e", "fetch('http://localhost:3001/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
