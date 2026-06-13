@@ -60,6 +60,19 @@ function buildApp(opts = {}) {
   });
 
   /**
+   * Heavy jobs (extraction, PDF tools — Python + LLM) run one-at-a-time so two
+   * can't spike CPU/RAM together and OOM a small box. Light jobs (scrape, gmp)
+   * are network-bound and run freely. No external queue: a single in-process
+   * promise chain gives us concurrency=1 for the heavy lane.
+   */
+  let heavyLane = Promise.resolve();
+  const runOnHeavyLane = (fn) => {
+    const next = heavyLane.then(fn, fn); // run regardless of prior outcome
+    heavyLane = next.catch(() => {});    // a failure must not break the chain
+    return next;
+  };
+
+  /**
    * Run a POST operation as a tracked job. fn(log) does the work and returns the
    * result. Long ops run async by default (return jobId, poll /jobs/:id); pass
    * { wait:true } in the body to run synchronously. Short ops omit longOp.
@@ -69,7 +82,7 @@ function buildApp(opts = {}) {
     // Serialize log writes so they persist in call order (services call log() without await).
     let logChain = Promise.resolve();
     const log = (msg) => { logChain = logChain.then(() => appendLog(jobId, msg)); return logChain; };
-    const exec = async () => {
+    const work = async () => {
       const t0 = Date.now();
       try {
         const result = await fn(log);
@@ -82,6 +95,8 @@ function buildApp(opts = {}) {
         throw e;
       }
     };
+    // Heavy jobs queue on the single-slot lane; light jobs run immediately.
+    const exec = longOp ? () => runOnHeavyLane(work) : work;
     if (longOp && !wait) {
       exec().catch(() => {}); // tracked via the job; errors recorded there
       return res.status(202).json({ jobId, status: 'running', poll: `/jobs/${jobId}` });
@@ -186,24 +201,35 @@ function buildApp(opts = {}) {
     res.json({ data: data.map(toCard), pagination });
   }));
 
-  // GET /sources — available sources + health
+  // GET /sources — available sources + health.
+  // A source is "down" if it has no IPOs at all, "stale" if its freshest record
+  // hasn't been refreshed within STALE_AFTER_HOURS (a scrape ran but this source
+  // returned nothing / silently broke), else "healthy".
+  const STALE_AFTER_HOURS = 36; // scrape is expected at least daily via cron
   app.get('/sources', asyncH(async (_req, res) => {
     const ipos = collections.ipos();
     const known = ['nse', 'bse', 'upstox', 'groww', 'zerodha', 'investorgain'];
+    const now = Date.now();
     const out = [];
     for (const s of known) {
       const count = await ipos.countDocuments({ [`sources.${s}`]: { $exists: true } });
       const latest = await ipos.find({ [`sources.${s}.lastFetched`]: { $exists: true } })
         .sort({ [`sources.${s}.lastFetched`]: -1 }).limit(1).project({ sources: 1 }).toArray();
-      out.push({
-        source: s,
-        ipos: count,
-        healthy: count > 0,
-        lastFetched: latest[0] ? latest[0].sources[s].lastFetched : null,
-      });
+      const lastFetched = latest[0] ? latest[0].sources[s].lastFetched : null;
+      const ageHours = lastFetched ? Math.round((now - new Date(lastFetched).getTime()) / 36e5) : null;
+      let status = 'healthy';
+      if (count === 0) status = 'down';
+      else if (ageHours == null || ageHours > STALE_AFTER_HOURS) status = 'stale';
+      out.push({ source: s, ipos: count, status, healthy: status === 'healthy', lastFetched, ageHours });
     }
     const lastScrape = (await collections.jobs().find({ type: 'scrape' }).sort({ createdAt: -1 }).limit(1).toArray())[0] || null;
-    res.json({ sources: out, lastScrape: lastScrape ? { jobId: lastScrape._id.toString(), status: lastScrape.status, at: lastScrape.createdAt } : null });
+    const unhealthy = out.filter((o) => o.status !== 'healthy').map((o) => o.source);
+    res.json({
+      sources: out,
+      unhealthy,                         // convenience list for alerting (Telegram later)
+      staleAfterHours: STALE_AFTER_HOURS,
+      lastScrape: lastScrape ? { jobId: lastScrape._id.toString(), status: lastScrape.status, at: lastScrape.createdAt } : null,
+    });
   }));
 
   // GET /stats — aggregated metrics for the dashboard overview (charts).

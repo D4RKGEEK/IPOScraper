@@ -540,18 +540,33 @@
                 <div x-show="lab.job.result.evidence?.length" class="text-xs text-muted-foreground space-y-0.5">
                   <template x-for="(ev,i) in lab.job.result.evidence" :key="i"><div class="pl-2 border-l-2 italic" x-text="ev"></div></template>
                 </div>
+                <!-- already extracted -->
+                <div x-show="lab.job.result.alreadyExtracted?.length" class="space-y-2">
+                  <div class="text-xs font-medium text-emerald-500">Already extracted</div>
+                  <template x-for="m in (lab.job.result.alreadyExtracted||[])" :key="m.key">
+                    <div class="rounded-lg border border-emerald-500/30 bg-emerald-500/5 p-3">
+                      <div class="flex items-center gap-2">
+                        <span class="font-mono font-medium" x-text="m.key"></span>
+                        <span class="text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-500">in schema</span>
+                      </div>
+                      <div class="text-xs text-muted-foreground mt-0.5" x-text="m.why || schema?.[m.key]?.description"></div>
+                    </div>
+                  </template>
+                </div>
+                <!-- new fields to add -->
                 <div class="space-y-2">
+                  <div x-show="Object.keys(lab.job.result.proposedFields||{}).length" class="text-xs font-medium text-muted-foreground">New fields</div>
                   <template x-for="[fk,def] in Object.entries(lab.job.result.proposedFields||{})" :key="fk">
                     <div class="rounded-lg border p-3 flex items-start gap-3">
                       <div class="flex-1 min-w-0">
-                        <div class="flex items-center gap-2"><span class="font-mono font-medium" x-text="fk"></span><span class="text-[10px] px-1.5 py-0.5 rounded bg-muted text-muted-foreground" x-text="def.type"></span></div>
+                        <div class="flex items-center gap-2"><span class="font-mono font-medium" x-text="fk"></span><span class="text-[10px] px-1.5 py-0.5 rounded bg-muted text-muted-foreground" x-text="def.type"></span><span x-show="schemaKeys.includes(fk)" class="text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-500">already in schema</span></div>
                         <div class="text-xs text-muted-foreground mt-0.5" x-text="def.description"></div>
                         <div x-show="def.fields" class="text-[11px] text-muted-foreground mt-1" x-text="def.fields?('cols: '+Object.keys(def.fields).join(', ')):''"></div>
                       </div>
-                      <button @click="applyProposed(fk,def)" class="text-xs px-2.5 py-1 rounded-md bg-primary text-primary-foreground hover:opacity-90 shrink-0">Add to schema</button>
+                      <button @click="applyProposed(fk,def)" x-show="!schemaKeys.includes(fk)" class="text-xs px-2.5 py-1 rounded-md bg-primary text-primary-foreground hover:opacity-90 shrink-0">Add to schema</button>
                     </div>
                   </template>
-                  <div x-show="!Object.keys(lab.job.result.proposedFields||{}).length" class="text-xs text-muted-foreground">No new fields proposed.</div>
+                  <div x-show="!Object.keys(lab.job.result.proposedFields||{}).length && !lab.job.result.alreadyExtracted?.length" class="text-xs text-muted-foreground">No new fields proposed.</div>
                 </div>
               </div>
             </template>
