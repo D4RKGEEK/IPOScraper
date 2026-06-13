@@ -9,7 +9,7 @@
  */
 
 const { getPageTexts } = require('../convert/pdf-bridge');
-const { SECTION_ALIASES } = require('../config');
+const { getSectionAliases } = require('../config');
 const { logger } = require('../../utils/logger');
 
 const log = logger.child({ module: 'extraction:toc-regex' });
@@ -96,6 +96,8 @@ async function findTocPages(pdfPath, nPages = 15) {
  */
 async function regexExtractTocMapping(pdfPath, tocPages, totalPages) {
   if (!tocPages.length) return {};
+
+  const SECTION_ALIASES = getSectionAliases();
 
   // A printed page number is plausible only if it's >= 1 and not larger than
   // the document. When totalPages is unknown, accept anything positive.

@@ -10,7 +10,7 @@
 const fs = require('fs');
 const path = require('path');
 const { markdownToHtml, wrapInStyledHtml } = require('../convert/md-to-html');
-const { IPO_DETAILS_SCHEMA } = require('../llm/schema');
+const { getIpoDetailsSchema } = require('../llm/schema');
 const { generateCacheKey, getCachedResponse, setCachedResponse } = require('../cache');
 const { recordFirecrawlUsage } = require('../usage');
 const { env } = require('../config');
@@ -64,7 +64,7 @@ async function firecrawlParse(htmlPath, section, ipoSlug, logMsg) {
     onlyMainContent: true,
     formats: [{
       type: 'json',
-      schema: IPO_DETAILS_SCHEMA,
+      schema: getIpoDetailsSchema(),
       prompt: 'Extract all available IPO details from this specific prospectus section. For any fields not found, return null.',
     }],
   };

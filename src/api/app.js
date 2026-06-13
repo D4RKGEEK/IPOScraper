@@ -13,7 +13,10 @@ const { runScrape, ALL_SOURCES } = require('../services/scrapeService');
 const { runGmp } = require('../services/gmpService');
 const { runHistorical } = require('../services/historicalService');
 const { runExtraction, runBulkExtraction } = require('../extraction');
-const { FIELDS, DEFAULT_VALUE } = require('../extraction/llm/schema');
+const schemaStore = require('../extraction/llm/schema');
+const sectionConfig = require('../extraction/config');
+const configRepo = require('../db/configRepository');
+const tools = require('../extraction/tools');
 const { createJob, appendLog, completeJob, failJob, getJob, listJobs } = require('../db/jobRepository');
 const { logger, requestLogger } = require('../utils/logger');
 
@@ -95,10 +98,10 @@ function buildApp(opts = {}) {
     res.json({ ok: true, ipos: count });
   }));
 
-  // GET /schema — the canonical extraction field registry, so the dashboard can
-  // render any extraction dynamically and stay in sync with llm/schema.js.
+  // GET /schema — the current (possibly dashboard-edited) extraction field
+  // registry, so the dashboard can render any extraction dynamically.
   app.get('/schema', (_req, res) => {
-    res.json({ fields: FIELDS, defaultValue: DEFAULT_VALUE });
+    res.json({ fields: schemaStore.getFields(), defaultValue: schemaStore.DEFAULT_VALUE });
   });
 
   // API 1: GET /ipos — meta/index
@@ -125,6 +128,49 @@ function buildApp(opts = {}) {
     }
     const lastScrape = (await collections.jobs().find({ type: 'scrape' }).sort({ createdAt: -1 }).limit(1).toArray())[0] || null;
     res.json({ sources: out, lastScrape: lastScrape ? { jobId: lastScrape._id.toString(), status: lastScrape.status, at: lastScrape.createdAt } : null });
+  }));
+
+  // GET /stats — aggregated metrics for the dashboard overview (charts).
+  // Resilient: each aggregation falls back to an empty/zero shape on failure so
+  // a single bad pipeline never 500s the whole dashboard.
+  app.get('/stats', asyncH(async (_req, res) => {
+    const ipos = collections.ipos();
+    const safe = async (p, fb) => { try { return await p; } catch { return fb; } };
+
+    const [total, byStatus, bySector, gmpLeaders, docCov, exStatus, exPipeline, jobsRaw] = await Promise.all([
+      safe(ipos.estimatedDocumentCount(), 0),
+      safe(ipos.aggregate([{ $group: { _id: '$status', count: { $sum: 1 } } }]).toArray(), []),
+      safe(ipos.aggregate([
+        { $match: { sector: { $nin: [null, ''] } } },
+        { $group: { _id: '$sector', count: { $sum: 1 } } },
+        { $sort: { count: -1 } }, { $limit: 8 },
+      ]).toArray(), []),
+      safe(ipos.aggregate([
+        { $match: { 'gmp.value': { $ne: null } } },
+        { $project: { _id: 0, slug: 1, companyName: 1, status: 1, gmp: '$gmp.value', gmpPct: '$gmp.percentage' } },
+        { $sort: { gmp: -1 } }, { $limit: 8 },
+      ]).toArray(), []),
+      safe(ipos.aggregate([{ $group: {
+        _id: null,
+        drhp: { $sum: { $cond: [{ $ifNull: ['$documents.drhp.url', false] }, 1, 0] } },
+        rhp: { $sum: { $cond: [{ $ifNull: ['$documents.rhp.url', false] }, 1, 0] } },
+        final: { $sum: { $cond: [{ $ifNull: ['$documents.final.url', false] }, 1, 0] } },
+      } } }]).toArray(), []),
+      safe(collections.extractions().aggregate([{ $group: { _id: '$status', count: { $sum: 1 } } }]).toArray(), []),
+      safe(collections.extractions().aggregate([{ $group: { _id: '$pipeline', count: { $sum: 1 } } }]).toArray(), []),
+      safe(collections.jobs().find({}).sort({ createdAt: -1 }).limit(400).project({ type: 1, status: 1, createdAt: 1 }).toArray(), []),
+    ]);
+
+    const toMap = (rows) => Object.fromEntries(rows.map((d) => [d._id || 'unknown', d.count]));
+    res.json({
+      total,
+      byStatus: toMap(byStatus),
+      bySector: bySector.map((d) => ({ sector: d._id, count: d.count })),
+      gmpLeaders,
+      docCoverage: docCov[0] ? { drhp: docCov[0].drhp, rhp: docCov[0].rhp, final: docCov[0].final } : { drhp: 0, rhp: 0, final: 0 },
+      extractions: { byStatus: toMap(exStatus), byPipeline: toMap(exPipeline) },
+      jobs: jobsRaw.map((j) => ({ type: j.type, status: j.status, createdAt: j.createdAt })),
+    });
   }));
 
   // API 2: GET /ipos/:slug — full details (merged, or ?raw=true)

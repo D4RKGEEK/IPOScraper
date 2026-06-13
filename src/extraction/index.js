@@ -54,7 +54,7 @@ function isExtractionProper(result) {
  */
 async function runDeepSeekExtraction(outputDir, sections) {
   const { callLlmJson } = require('./llm/client');
-  const { IPO_DETAILS_SCHEMA } = require('./llm/schema');
+  const { getIpoDetailsSchema } = require('./llm/schema');
 
   // Read merged markdown
   const mergedPath = path.join(outputDir, 'merged.md');
@@ -78,7 +78,7 @@ You must output a strictly valid JSON object matching the JSON Schema provided. 
 For any fields not found in the text, return null.
 
 JSON SCHEMA:
-${JSON.stringify(IPO_DETAILS_SCHEMA)}
+${JSON.stringify(getIpoDetailsSchema())}
 
 PROSPECTUS TEXT:
 ${mergedText}`;
@@ -473,4 +473,4 @@ async function runBulkExtraction(opts = {}) {
   return { ...summary, usage: getUsage() };
 }
 
-module.exports = { runExtraction, runBulkExtraction };
+module.exports = { runExtraction, runBulkExtraction, downloadPdf };

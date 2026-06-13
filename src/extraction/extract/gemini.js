@@ -10,7 +10,7 @@
 const fs = require('fs');
 const path = require('path');
 const { callGeminiStructured } = require('../llm/client');
-const { GEMINI_SCHEMA } = require('../llm/schema');
+const { getGeminiSchema } = require('../llm/schema');
 const { logger } = require('../../utils/logger');
 
 const log = logger.child({ module: 'extraction:gemini' });
@@ -52,7 +52,7 @@ ${mergedText}`;
 
   log.info({ sections: sections.length, chars: mergedText.length }, 'calling Gemini structured extraction');
 
-  const result = await callGeminiStructured(prompt, GEMINI_SCHEMA);
+  const result = await callGeminiStructured(prompt, getGeminiSchema());
 
   // Save result
   const resultPath = path.join(outputDir, 'summary.json');

@@ -14,8 +14,8 @@ const { logger } = require('../../utils/logger');
 // Placeholder detection and field groupings come from the single source of
 // truth (schema.js) so adding/removing a field there updates merge too.
 const {
-  isPlaceholder, STRING_FIELDS, LIST_FIELDS, OBJECT_LIST_FIELDS,
-  canonicalCategory, canonicalPeriod,
+  isPlaceholder, getStringFields, getListFields, getObjectListFields,
+  getObjectListMerge, canonicalCategory, canonicalPeriod,
 } = require('../llm/schema');
 
 const log = logger.child({ module: 'extraction:merge' });
@@ -57,17 +57,11 @@ function fuzzyDedupeStrings(items) {
 }
 
 // ── Generic object-list merging ───────────────────────────────────────────────
-// How to merge each objectList field. A field listed here is grouped by a key
-// (rows with a matching key are combined, preferring non-placeholder values);
-// anything else just gets exact-duplicate rows removed.
+// How to merge each objectList field is now declared on the field itself in
+// schema.js (mergeKey / mergeMatch) and surfaced via getObjectListMerge():
 //   'similar'  → group by fuzzy-matching the key value (e.g. period names)
 //   'category' → group by normalized investor-category synonyms
-const OBJECT_LIST_MERGE = {
-  financials: { key: 'period', match: 'similar' },
-  kpis: { key: 'period', match: 'similar' },
-  reservations: { key: 'category', match: 'category' },
-  subscription: { key: 'category', match: 'category' },
-};
+// A field with no rule just gets exact-duplicate rows removed.
 
 /**
  * Merge rows of an objectList by grouping on a key field. Rows whose key
@@ -134,6 +128,12 @@ function dedupeObjectList(rows) {
  */
 function mergeSectionResponses(responses) {
   const combined = {};
+
+  // Snapshot the current (possibly dashboard-edited) field groupings + rules.
+  const STRING_FIELDS = getStringFields();
+  const LIST_FIELDS = getListFields();
+  const OBJECT_LIST_FIELDS = getObjectListFields();
+  const OBJECT_LIST_MERGE = getObjectListMerge();
 
   // Initialize list & object-list fields
   for (const key of LIST_FIELDS) combined[key] = [];
