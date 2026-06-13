@@ -40,8 +40,19 @@ function buildApp(opts = {}) {
   // POST /auth/login — exchange credentials for a token.
   app.post('/auth/login', loginHandler);
 
+  // GET /health — PUBLIC: Railway's healthcheck hits this; it must not require a
+  // token, or the deploy never goes healthy when DASHBOARD_PASSWORD is set.
+  app.get('/health', (_req, res) => {
+    collections.ipos().estimatedDocumentCount()
+      .then((ipos) => res.json({ ok: true, ipos }))
+      .catch((e) => res.status(500).json({ ok: false, error: e.message }));
+  });
+
   // ── Everything past here requires a valid token (when auth is enabled) ──────
   app.use(authGuard);
+
+  // GET /auth/me — PROTECTED: lets the dashboard validate a stored token.
+  app.get('/auth/me', (_req, res) => res.json({ ok: true, user: DASHBOARD_USER }));
 
   const asyncH = (fn) => (req, res) => fn(req, res).catch((e) => {
     logger.error({ err: e, method: req.method, path: req.path }, 'Request error');
@@ -103,11 +114,6 @@ function buildApp(opts = {}) {
       createdAt: doc.createdAt,
     };
   }
-
-  app.get('/health', asyncH(async (_req, res) => {
-    const count = await collections.ipos().estimatedDocumentCount();
-    res.json({ ok: true, ipos: count });
-  }));
 
   // GET /schema — the current (possibly dashboard-edited) extraction field
   // registry, so the dashboard can render any extraction dynamically.

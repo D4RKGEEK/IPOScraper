@@ -781,8 +781,8 @@ function app() {
       this.loginForm.username = this.authUser;
       if (this.authEnabled) {
         if (!this.token) { this.needsLogin = true; return; }
-        // validate stored token
-        const ok = await fetch('/health', { headers: this.authHeaders() }).then(r => r.ok).catch(() => false);
+        // validate stored token against a protected endpoint
+        const ok = await fetch('/auth/me', { headers: this.authHeaders() }).then(r => r.ok).catch(() => false);
         if (!ok) { this.token = ''; localStorage.removeItem('authToken'); this.needsLogin = true; return; }
       }
       await this.boot();
