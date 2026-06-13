@@ -8,7 +8,7 @@ const {
   applyTimeline,
   toIsoDate,
   TIMELINE_EVENTS,
-} = require('../utils/timelineBuilder.js');
+} = require('../../src/utils/timelineBuilder.js');
 
 // ─── toIsoDate ────────────────────────────────────────────────────────────────
 

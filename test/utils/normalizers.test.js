@@ -4,7 +4,7 @@ import {
   normalizeSymbol,
   parseIndianDate,
   formatDateISO
-} from '../utils/normalizers.js';
+} from '../../src/utils/normalizers.js';
 
 test('Normalizers normalization checks', () => {
   // Company name normalization

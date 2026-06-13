@@ -2,9 +2,9 @@ import { describe, it, expect } from 'vitest';
 import { createRequire } from 'module';
 const require = createRequire(import.meta.url);
 
-const { matchGmp } = require('../services/gmpService');
-const { deriveHistorical } = require('../services/historicalService');
-const { extractGmpId, igDateToIso } = require('../utils/gmpCrawler');
+const { matchGmp } = require('../../src/services/gmpService.js');
+const { deriveHistorical } = require('../../src/services/historicalService.js');
+const { extractGmpId, igDateToIso } = require('../../src/scrapers/gmpCrawler.js');
 
 describe('InvestorGain parsing helpers', () => {
   it('extracts the IPO id from an InvestorGain href', () => {

@@ -3,7 +3,7 @@ import { createRequire } from 'module';
 
 const require = createRequire(import.meta.url);
 
-const { buildInstrumentKey, formatDate, fetchDailyCandles } = require('../utils/candleFetcher.js');
+const { buildInstrumentKey, formatDate, fetchDailyCandles } = require('../../src/scrapers/candleFetcher.js');
 
 afterEach(() => {
   vi.restoreAllMocks();

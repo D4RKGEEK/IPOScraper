@@ -1,5 +1,5 @@
 import { test, expect } from 'vitest';
-import { jaroWinkler } from '../utils/jaroWinkler.js';
+import { jaroWinkler } from '../../src/utils/jaroWinkler.js';
 
 test('Jaro-Winkler similarity matching', () => {
   // Completely different names should have low similarity

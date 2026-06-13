@@ -20,9 +20,7 @@ function buildApp(opts = {}) {
   app.use(express.json({ limit: '2mb' }));
   app.use(requestLogger);
 
-  // Document extraction pipeline (PRD v2.1) — Express router supplied by
-  // src/extraction/bootstrap.ts; mounted here so it sits before the 404.
-  if (opts.v1Router) app.use('/v1', opts.v1Router);
+
 
   // Serve the dashboard SPA
   const publicDir = path.join(__dirname, 'public');
@@ -168,15 +166,7 @@ function buildApp(opts = {}) {
     await runTracked(res, { type: 'historical', params: { status, since, limit } }, (log) => runHistorical({ status, since, limit, log }));
   }));
 
-  // POST /ipos/:slug/extract — send this IPO's document links (drhp/rhp) to the
-  // extraction pipeline service (PRD v2.1; runs separately via `npm run extraction`).
-  app.post('/ipos/:slug/extract', asyncH(async (req, res) => {
-    const { dispatchIpoDocuments } = require('../services/documentDispatcher');
-    const ipo = await findBySlug(req.params.slug);
-    if (!ipo) return res.status(404).json({ error: 'IPO not found', slug: req.params.slug });
-    const dispatched = await dispatchIpoDocuments(ipo);
-    res.json({ slug: ipo.slug, dispatched });
-  }));
+
 
   // DELETE /ipos/:slug — remove IPO + its documents
   app.delete('/ipos/:slug', asyncH(async (req, res) => {

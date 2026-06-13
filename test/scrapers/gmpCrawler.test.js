@@ -3,7 +3,7 @@ import { createRequire } from 'module';
 
 const require = createRequire(import.meta.url);
 
-const { normalizeName, matchGmpToIpo } = require('../utils/gmpCrawler.js');
+const { normalizeName, matchGmpToIpo } = require('../../src/scrapers/gmpCrawler.js');
 
 afterEach(() => {
   vi.restoreAllMocks();

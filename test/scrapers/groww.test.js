@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { createRequire } from 'module';
 const require = createRequire(import.meta.url);
 
-const { mapGrowwRecord, mapStatus, priceBandOf, toIsoDate } = require('../utils/groww');
+const { mapGrowwRecord, mapStatus, priceBandOf, toIsoDate } = require('../../src/scrapers/groww.js');
 
 describe('toIsoDate', () => {
   it('converts epoch ms to YYYY-MM-DD', () => {

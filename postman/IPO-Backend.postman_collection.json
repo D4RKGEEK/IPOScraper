@@ -12,62 +12,172 @@
           "name": "Health",
           "request": {
             "method": "GET",
-            "url": { "raw": "http://localhost:3001/health", "protocol": "http", "host": ["localhost"], "port": "3001", "path": ["health"] }
+            "url": {
+              "raw": "http://localhost:3001/health",
+              "protocol": "http",
+              "host": [
+                "localhost"
+              ],
+              "port": "3001",
+              "path": [
+                "health"
+              ]
+            }
           }
         },
         {
           "name": "Sources Status",
           "request": {
             "method": "GET",
-            "url": { "raw": "http://localhost:3001/sources", "protocol": "http", "host": ["localhost"], "port": "3001", "path": ["sources"] }
+            "url": {
+              "raw": "http://localhost:3001/sources",
+              "protocol": "http",
+              "host": [
+                "localhost"
+              ],
+              "port": "3001",
+              "path": [
+                "sources"
+              ]
+            }
           }
         },
         {
           "name": "List IPOs",
           "request": {
             "method": "GET",
-            "url": { "raw": "http://localhost:3001/ipos", "protocol": "http", "host": ["localhost"], "port": "3001", "path": ["ipos"] }
+            "url": {
+              "raw": "http://localhost:3001/ipos",
+              "protocol": "http",
+              "host": [
+                "localhost"
+              ],
+              "port": "3001",
+              "path": [
+                "ipos"
+              ]
+            }
           }
         },
         {
           "name": "Get Single IPO",
           "request": {
             "method": "GET",
-            "url": { "raw": "http://localhost:3001/ipos/ola-electric-ipo", "protocol": "http", "host": ["localhost"], "port": "3001", "path": ["ipos", "ola-electric-ipo"] }
+            "url": {
+              "raw": "http://localhost:3001/ipos/ola-electric-ipo",
+              "protocol": "http",
+              "host": [
+                "localhost"
+              ],
+              "port": "3001",
+              "path": [
+                "ipos",
+                "ola-electric-ipo"
+              ]
+            }
           }
         },
         {
           "name": "Get IPO History (GMP)",
           "request": {
             "method": "GET",
-            "url": { "raw": "http://localhost:3001/ipos/ola-electric-ipo/history", "protocol": "http", "host": ["localhost"], "port": "3001", "path": ["ipos", "ola-electric-ipo", "history"] }
+            "url": {
+              "raw": "http://localhost:3001/ipos/ola-electric-ipo/history",
+              "protocol": "http",
+              "host": [
+                "localhost"
+              ],
+              "port": "3001",
+              "path": [
+                "ipos",
+                "ola-electric-ipo",
+                "history"
+              ]
+            }
           }
         },
         {
           "name": "Trigger Scrape",
           "request": {
             "method": "POST",
-            "header": [ { "key": "Content-Type", "value": "application/json" } ],
-            "body": { "mode": "raw", "raw": "{\n  \"sources\": [\"nse\", \"groww\", \"upstox\", \"zerodha\"]\n}" },
-            "url": { "raw": "http://localhost:3001/ipos/scrape", "protocol": "http", "host": ["localhost"], "port": "3001", "path": ["ipos", "scrape"] }
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"sources\": [\"nse\", \"groww\", \"upstox\", \"zerodha\"]\n}"
+            },
+            "url": {
+              "raw": "http://localhost:3001/ipos/scrape",
+              "protocol": "http",
+              "host": [
+                "localhost"
+              ],
+              "port": "3001",
+              "path": [
+                "ipos",
+                "scrape"
+              ]
+            }
           }
         },
         {
           "name": "Trigger GMP Crawl",
           "request": {
             "method": "POST",
-            "header": [ { "key": "Content-Type", "value": "application/json" } ],
-            "body": { "mode": "raw", "raw": "{}" },
-            "url": { "raw": "http://localhost:3001/ipos/gmp", "protocol": "http", "host": ["localhost"], "port": "3001", "path": ["ipos", "gmp"] }
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{}"
+            },
+            "url": {
+              "raw": "http://localhost:3001/ipos/gmp",
+              "protocol": "http",
+              "host": [
+                "localhost"
+              ],
+              "port": "3001",
+              "path": [
+                "ipos",
+                "gmp"
+              ]
+            }
           }
         },
         {
           "name": "Trigger Historical Prices",
           "request": {
             "method": "POST",
-            "header": [ { "key": "Content-Type", "value": "application/json" } ],
-            "body": { "mode": "raw", "raw": "{}" },
-            "url": { "raw": "http://localhost:3001/ipos/historical", "protocol": "http", "host": ["localhost"], "port": "3001", "path": ["ipos", "historical"] }
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{}"
+            },
+            "url": {
+              "raw": "http://localhost:3001/ipos/historical",
+              "protocol": "http",
+              "host": [
+                "localhost"
+              ],
+              "port": "3001",
+              "path": [
+                "ipos",
+                "historical"
+              ]
+            }
           }
         },
         {
@@ -75,132 +185,72 @@
           "request": {
             "method": "POST",
             "header": [],
-            "url": { "raw": "http://localhost:3001/ipos/ola-electric-ipo/extract", "protocol": "http", "host": ["localhost"], "port": "3001", "path": ["ipos", "ola-electric-ipo", "extract"] }
+            "url": {
+              "raw": "http://localhost:3001/ipos/ola-electric-ipo/extract",
+              "protocol": "http",
+              "host": [
+                "localhost"
+              ],
+              "port": "3001",
+              "path": [
+                "ipos",
+                "ola-electric-ipo",
+                "extract"
+              ]
+            }
           }
         },
         {
           "name": "Delete IPO",
           "request": {
             "method": "DELETE",
-            "url": { "raw": "http://localhost:3001/ipos/ola-electric-ipo", "protocol": "http", "host": ["localhost"], "port": "3001", "path": ["ipos", "ola-electric-ipo"] }
+            "url": {
+              "raw": "http://localhost:3001/ipos/ola-electric-ipo",
+              "protocol": "http",
+              "host": [
+                "localhost"
+              ],
+              "port": "3001",
+              "path": [
+                "ipos",
+                "ola-electric-ipo"
+              ]
+            }
           }
         },
         {
           "name": "List Jobs",
           "request": {
             "method": "GET",
-            "url": { "raw": "http://localhost:3001/jobs", "protocol": "http", "host": ["localhost"], "port": "3001", "path": ["jobs"] }
+            "url": {
+              "raw": "http://localhost:3001/jobs",
+              "protocol": "http",
+              "host": [
+                "localhost"
+              ],
+              "port": "3001",
+              "path": [
+                "jobs"
+              ]
+            }
           }
         },
         {
           "name": "Get Job Detail",
           "request": {
             "method": "GET",
-            "url": { "raw": "http://localhost:3001/jobs/66bd...1234", "protocol": "http", "host": ["localhost"], "port": "3001", "path": ["jobs", "66bd...1234"] }
-          }
-        }
-      ]
-    },
-    {
-      "name": "Extraction API (Port 3001, /v1)",
-      "item": [
-        {
-          "name": "Health",
-          "request": {
-            "method": "GET",
-            "header": [ { "key": "X-API-Key", "value": "{{api_key}}" } ],
-            "url": { "raw": "http://localhost:8090/v1/health", "protocol": "http", "host": ["localhost"], "port": "8090", "path": ["v1", "health"] }
-          }
-        },
-        {
-          "name": "Extraction Stats",
-          "request": {
-            "method": "GET",
-            "header": [ { "key": "X-API-Key", "value": "{{api_key}}" } ],
-            "url": { "raw": "http://localhost:3001/v1/stats", "protocol": "http", "host": ["localhost"], "port": "3001", "path": ["v1", "stats"] }
-          }
-        },
-        {
-          "name": "Submit Document PDF",
-          "request": {
-            "method": "POST",
-            "header": [ { "key": "X-API-Key", "value": "{{api_key}}"}, { "key": "Content-Type", "value": "application/json" } ],
-            "body": { "mode": "raw", "raw": "{\n  \"ipoSlug\": \"ola-electric-ipo\",\n  \"force\": true\n}" },
-            "url": { "raw": "http://localhost:3001/v1/documents", "protocol": "http", "host": ["localhost"], "port": "3001", "path": ["v1", "documents"] }
-          }
-        },
-        {
-          "name": "List Documents",
-          "request": {
-            "method": "GET",
-            "header": [ { "key": "X-API-Key", "value": "{{api_key}}" } ],
-            "url": { "raw": "http://localhost:3001/v1/documents", "protocol": "http", "host": ["localhost"], "port": "3001", "path": ["v1", "documents"] }
-          }
-        },
-        {
-          "name": "Get Document Progress",
-          "request": {
-            "method": "GET",
-            "header": [ { "key": "X-API-Key", "value": "{{api_key}}" } ],
-            "url": { "raw": "http://localhost:3001/v1/documents/:id", "protocol": "http", "host": ["localhost"], "port": "3001", "path": ["v1", "documents", ":id"], "variable": [ { "key": "id", "value": "" } ] }
-          }
-        },
-        {
-          "name": "Get Document Result",
-          "request": {
-            "method": "GET",
-            "header": [ { "key": "X-API-Key", "value": "{{api_key}}" } ],
-            "url": { "raw": "http://localhost:3001/v1/documents/:id/result", "protocol": "http", "host": ["localhost"], "port": "3001", "path": ["v1", "documents", ":id", "result"], "variable": [ { "key": "id", "value": "" } ] }
-          }
-        },
-        {
-          "name": "Get Document Events",
-          "request": {
-            "method": "GET",
-            "header": [ { "key": "X-API-Key", "value": "{{api_key}}" } ],
-            "url": { "raw": "http://localhost:3001/v1/documents/:id/events", "protocol": "http", "host": ["localhost"], "port": "3001", "path": ["v1", "documents", ":id", "events"], "variable": [ { "key": "id", "value": "" } ] }
-          }
-        },
-        {
-          "name": "Retry Document",
-          "request": {
-            "method": "POST",
-            "header": [ { "key": "X-API-Key", "value": "{{api_key}}"}, { "key": "Content-Type", "value": "application/json" } ],
-            "body": { "mode": "raw", "raw": "{\n  \"force\": false\n}" },
-            "url": { "raw": "http://localhost:3001/v1/documents/:id/retry", "protocol": "http", "host": ["localhost"], "port": "3001", "path": ["v1", "documents", ":id", "retry"], "variable": [ { "key": "id", "value": "" } ] }
-          }
-        },
-        {
-          "name": "List Review Queue",
-          "request": {
-            "method": "GET",
-            "header": [ { "key": "X-API-Key", "value": "{{api_key}}" } ],
-            "url": { "raw": "http://localhost:3001/v1/reviews?status=open", "protocol": "http", "host": ["localhost"], "port": "3001", "path": ["v1", "reviews"], "query": [ { "key": "status", "value": "open" } ] }
-          }
-        },
-        {
-          "name": "Resolve Review",
-          "request": {
-            "method": "POST",
-            "header": [ { "key": "X-API-Key", "value": "{{api_key}}"}, { "key": "Content-Type", "value": "application/json" } ],
-            "body": { "mode": "raw", "raw": "{\n  \"value\": \"10000000\",\n  \"dismiss\": false,\n  \"resolvedBy\": \"human_reviewer\"\n}" },
-            "url": { "raw": "http://localhost:3001/v1/reviews/:id/resolve", "protocol": "http", "host": ["localhost"], "port": "3001", "path": ["v1", "reviews", ":id", "resolve"], "variable": [ { "key": "id", "value": "" } ] }
-          }
-        },
-        {
-          "name": "List Merged IPOs (Extraction Side)",
-          "request": {
-            "method": "GET",
-            "header": [ { "key": "X-API-Key", "value": "{{api_key}}" } ],
-            "url": { "raw": "http://localhost:3001/v1/ipos", "protocol": "http", "host": ["localhost"], "port": "3001", "path": ["v1", "ipos"] }
-          }
-        },
-        {
-          "name": "Run Janitor",
-          "request": {
-            "method": "POST",
-            "header": [ { "key": "X-API-Key", "value": "{{api_key}}" } ],
-            "url": { "raw": "http://localhost:3001/v1/admin/janitor?dryRun=1", "protocol": "http", "host": ["localhost"], "port": "3001", "path": ["v1", "admin", "janitor"], "query": [ { "key": "dryRun", "value": "1" } ] }
+            "url": {
+              "raw": "http://localhost:3001/jobs/66bd...1234",
+              "protocol": "http",
+              "host": [
+                "localhost"
+              ],
+              "port": "3001",
+              "path": [
+                "jobs",
+                "66bd...1234"
+              ]
+            }
           }
         }
       ]

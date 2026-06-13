@@ -3,7 +3,7 @@ import { createRequire } from 'module';
 const require = createRequire(import.meta.url);
 const axios = require('axios');
 
-const { fetchUpstoxIpos, mapUpstoxRecord } = require('../utils/upstox.js');
+const { fetchUpstoxIpos, mapUpstoxRecord } = require('../../src/scrapers/upstox.js');
 
 beforeEach(() => {
   vi.restoreAllMocks();

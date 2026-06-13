@@ -2,9 +2,9 @@ import { describe, it, expect } from 'vitest';
 import { createRequire } from 'module';
 const require = createRequire(import.meta.url);
 
-const { slugify } = require('../utils/slug');
-const { toIpoDoc, issueType, subscription, documentsMap } = require('../db/ipoModel');
-const { diffFields, mergeDocuments } = require('../db/ipoRepository');
+const { slugify } = require('../../src/utils/slug.js');
+const { toIpoDoc, issueType, subscription, documentsMap } = require('../../src/db/ipoModel.js');
+const { diffFields, mergeDocuments } = require('../../src/db/ipoRepository.js');
 
 describe('slugify', () => {
   it('builds company-name-ipo, stripping suffixes', () => {

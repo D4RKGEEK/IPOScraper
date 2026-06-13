@@ -5,7 +5,7 @@ const require = createRequire(import.meta.url);
 const {
   classifyDocFromUrl, parsePriceBand, parseDateRange, inferStatus,
   parseList, parseDetailProspectus, mapZerodhaRecord,
-} = require('../utils/zerodha');
+} = require('../../src/scrapers/zerodha.js');
 
 describe('classifyDocFromUrl', () => {
   it('follows the filename rule (drhp > final > rhp > default drhp)', () => {

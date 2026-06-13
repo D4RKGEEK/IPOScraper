@@ -3,7 +3,7 @@ import { createRequire } from 'module';
 const require = createRequire(import.meta.url);
 
 const { NSE } = require('nse-bse-api');
-const { fetchNseIpos, mapNseRecord, parsePriceRange } = require('../utils/nse.js');
+const { fetchNseIpos, mapNseRecord, parsePriceRange } = require('../../src/scrapers/nse.js');
 
 beforeEach(() => {
   vi.restoreAllMocks();
