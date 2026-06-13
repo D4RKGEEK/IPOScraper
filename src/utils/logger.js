@@ -17,7 +17,14 @@ const LOG_LEVEL = process.env.LOG_LEVEL || 'info';
 const logger = pino({
   level: LOG_LEVEL,
   transport: process.env.NODE_ENV !== 'production' 
-    ? { target: 'pino-pretty', options: { colorize: true, translateTime: 'SYS:standard' } }
+    ? { 
+        target: 'pino-pretty', 
+        options: { 
+          colorize: true, 
+          translateTime: 'SYS:standard',
+          ignore: 'pid,hostname,req,res,requestId'
+        } 
+      }
     : undefined,
 });
 
@@ -32,6 +39,16 @@ function requestLogger(req, res, next) {
   req.id = req.id || req.headers['x-request-id'] || Math.random().toString(36).slice(2, 15);
   
   res.on('finish', () => {
+    // Skip logging successful polling, health, and static dashboard assets to prevent console clutter
+    if (res.statusCode < 400) {
+      const isJobPoll = req.path.startsWith('/jobs/');
+      const isHealth = req.path === '/health';
+      const isDashboard = req.path.startsWith('/dashboard') || req.path === '/';
+      if (isJobPoll || isHealth || isDashboard) {
+        return;
+      }
+    }
+
     const duration = Date.now() - start;
     const level = res.statusCode >= 400 ? 'warn' : 'info';
     

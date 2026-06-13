@@ -174,13 +174,13 @@ function buildApp(opts = {}) {
     const ipo = await findBySlug(req.params.slug);
     if (!ipo) return res.status(404).json({ error: 'IPO not found', slug: req.params.slug });
     
-    let { pipeline = 'gemini', docType = 'auto', force = false, wait = false } = req.body || {};
+    let { pipeline = 'cascade', docType = 'auto', force = false, wait = false } = req.body || {};
     
     // Auto-pick pipeline
-    if (pipeline === 'deepseek') {
-      pipeline = 'gemini';
-    } else if (pipeline !== 'gemini' && pipeline !== 'firecrawl' && pipeline !== 'both') {
-      pipeline = 'gemini';
+    if (pipeline === 'deepseek' || pipeline === 'default') {
+      pipeline = 'cascade';
+    } else if (pipeline !== 'gemini' && pipeline !== 'firecrawl' && pipeline !== 'both' && pipeline !== 'cascade') {
+      pipeline = 'cascade';
     }
 
     // Auto-pick docType based on priority: final > rhp > drhp
@@ -206,13 +206,13 @@ function buildApp(opts = {}) {
 
   // POST /ipos/extract — bulk extract all IPOs that have documents
   app.post('/ipos/extract', asyncH(async (req, res) => {
-    let { pipeline = 'gemini', docType = 'auto', status, force = false, wait = false } = req.body || {};
+    let { pipeline = 'cascade', docType = 'auto', status, force = false, wait = false } = req.body || {};
     
     // Auto-pick pipeline
-    if (pipeline === 'deepseek') {
-      pipeline = 'gemini';
-    } else if (pipeline !== 'gemini' && pipeline !== 'firecrawl' && pipeline !== 'both') {
-      pipeline = 'gemini';
+    if (pipeline === 'deepseek' || pipeline === 'default') {
+      pipeline = 'cascade';
+    } else if (pipeline !== 'gemini' && pipeline !== 'firecrawl' && pipeline !== 'both' && pipeline !== 'cascade') {
+      pipeline = 'cascade';
     }
 
     await runTracked(res,
