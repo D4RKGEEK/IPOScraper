@@ -8,7 +8,7 @@
  */
 
 const { getPageTexts, getPageCount } = require('../convert/pdf-bridge');
-const { SECTION_ALIASES } = require('../config');
+const { getSectionAliases } = require('../config');
 const { callLlmJson } = require('../llm/client');
 const { logger } = require('../../utils/logger');
 
@@ -23,7 +23,7 @@ const log = logger.child({ module: 'extraction:page-scan' });
  * @returns {Promise<[number, number]|null>} [startPage, endPage] or null
  */
 async function llmFallbackLocate(pdfPath, sectionKey, chunkSize = 15) {
-  const aliases = SECTION_ALIASES[sectionKey] || [sectionKey.toLowerCase().replace(/_/g, ' ')];
+  const aliases = getSectionAliases()[sectionKey] || [sectionKey.toLowerCase().replace(/_/g, ' ')];
   const totalPages = await getPageCount(pdfPath);
 
   let foundStart = null;

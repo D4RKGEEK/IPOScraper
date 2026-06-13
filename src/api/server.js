@@ -9,12 +9,16 @@ require('dotenv').config();
 
 const { buildApp } = require('./app');
 const { connect } = require('../db/mongo');
+const { loadConfig } = require('../db/configRepository');
 const { logger } = require('../utils/logger');
 
 const PORT = process.env.PORT || 3001;
 
 async function main() {
   await connect();
+
+  // Apply any dashboard-saved schema / section overrides before serving.
+  await loadConfig();
 
   const app = buildApp();
   app.listen(PORT, () => {

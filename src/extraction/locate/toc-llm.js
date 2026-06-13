@@ -8,7 +8,7 @@
  */
 
 const { getPageTexts } = require('../convert/pdf-bridge');
-const { SECTION_ALIASES } = require('../config');
+const { getSectionAliases } = require('../config');
 const { callLlmJson } = require('../llm/client');
 const { logger } = require('../../utils/logger');
 
@@ -37,6 +37,7 @@ async function llmTocMapping(pdfPath, missingSections, tocPages) {
   }
 
   // Build aliases subset for only the missing sections
+  const SECTION_ALIASES = getSectionAliases();
   const aliasesSubset = {};
   for (const key of missingSections) {
     aliasesSubset[key] = SECTION_ALIASES[key] || [key.toLowerCase().replace(/_/g, ' ')];

@@ -62,6 +62,7 @@ const collections = {
   jobs: () => getDb().collection('jobs'),
   extractions: () => getDb().collection('extractions'),
   extractionCache: () => getDb().collection('extraction_cache'),
+  config: () => getDb().collection('config'),
 };
 
 async function close() {

@@ -20,6 +20,7 @@ const { pagesToMarkdown } = require('./convert/pdf-bridge');
 const { runGeminiExtraction } = require('./extract/gemini');
 const { runFirecrawlExtraction } = require('./extract/firecrawl');
 const { mergeSectionResponses } = require('./extract/merge');
+const { normalize, isPlaceholder } = require('./llm/schema');
 const { env } = require('./config');
 const { resetUsage, getUsage } = require('./usage');
 const { collections } = require('../db/mongo');
@@ -34,12 +35,13 @@ const log = logger.child({ module: 'extraction' });
  */
 function isExtractionProper(result) {
   if (!result || typeof result !== 'object') return false;
-  if (!result.company_name) return false;
+  if (isPlaceholder(result.company_name)) return false;
 
   let populatedCount = 0;
-  for (const [key, val] of Object.entries(result)) {
-    if (val !== null && val !== undefined && val !== '') {
-      if (Array.isArray(val) && val.length === 0) continue;
+  for (const val of Object.values(result)) {
+    if (Array.isArray(val)) {
+      if (val.length > 0) populatedCount++;
+    } else if (!isPlaceholder(val)) {
       populatedCount++;
     }
   }
@@ -52,7 +54,7 @@ function isExtractionProper(result) {
  */
 async function runDeepSeekExtraction(outputDir, sections) {
   const { callLlmJson } = require('./llm/client');
-  const { IPO_DETAILS_SCHEMA } = require('./llm/schema');
+  const { getIpoDetailsSchema } = require('./llm/schema');
 
   // Read merged markdown
   const mergedPath = path.join(outputDir, 'merged.md');
@@ -76,7 +78,7 @@ You must output a strictly valid JSON object matching the JSON Schema provided. 
 For any fields not found in the text, return null.
 
 JSON SCHEMA:
-${JSON.stringify(IPO_DETAILS_SCHEMA)}
+${JSON.stringify(getIpoDetailsSchema())}
 
 PROSPECTUS TEXT:
 ${mergedText}`;
@@ -337,6 +339,20 @@ async function runExtraction(ipo, opts = {}) {
     finalResult = pipeline === 'both' ? results : (results[pipeline] || null);
   }
 
+  // ── Normalize to the canonical schema shape ────────────────────────────
+  // Force whichever engine won into the exact format defined in llm/schema.js:
+  // every field present, extra keys dropped, missing scalars → "[-]", missing
+  // lists → []. This is what guarantees a consistent output regardless of which
+  // engine (Firecrawl / Gemini / DeepSeek) produced the data.
+  if (finalResult) {
+    if (pipeline === 'both') {
+      if (finalResult.gemini) finalResult.gemini = normalize(finalResult.gemini);
+      if (finalResult.firecrawl) finalResult.firecrawl = normalize(finalResult.firecrawl);
+    } else {
+      finalResult = normalize(finalResult);
+    }
+  }
+
   // ── Save to MongoDB ────────────────────────────────────────────────────
   const extractionDoc = {
     ipoSlug: ipo.slug,
@@ -457,4 +473,4 @@ async function runBulkExtraction(opts = {}) {
   return { ...summary, usage: getUsage() };
 }
 
-module.exports = { runExtraction, runBulkExtraction };
+module.exports = { runExtraction, runBulkExtraction, downloadPdf };

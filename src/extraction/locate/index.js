@@ -18,7 +18,7 @@ const { llmTocMapping } = require('./toc-llm');
 const { findOffset, computeRanges } = require('./offset');
 const { llmFallbackLocate } = require('./page-scan');
 const { getPageCount } = require('../convert/pdf-bridge');
-const { TARGET_SECTIONS } = require('../config');
+const { getTargetSections } = require('../config');
 const { logger } = require('../../utils/logger');
 
 const log = logger.child({ module: 'extraction:locate' });
@@ -32,7 +32,7 @@ const log = logger.child({ module: 'extraction:locate' });
  * @returns {Promise<object>} { SECTION_KEY: { range: [start, end] | null, method: string } }
  */
 async function getSectionRanges(pdfPath, targetSections, progressLog) {
-  const sections = targetSections || TARGET_SECTIONS;
+  const sections = targetSections || getTargetSections();
   const logMsg = progressLog || (() => {});
 
   const totalPages = await getPageCount(pdfPath);
@@ -44,7 +44,7 @@ async function getSectionRanges(pdfPath, targetSections, progressLog) {
   const regexFound = new Set();
 
   if (tocPages.length) {
-    tocMapping = await regexExtractTocMapping(pdfPath, tocPages);
+    tocMapping = await regexExtractTocMapping(pdfPath, tocPages, totalPages);
     for (const key of Object.keys(tocMapping)) regexFound.add(key);
     logMsg(`regex ToC found: ${Object.keys(tocMapping).join(', ') || 'none'}`);
   } else {

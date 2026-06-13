@@ -1,0 +1,996 @@
+<!doctype html>
+<html lang="en" class="">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>IPO Platform</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: { extend: {
+        fontFamily: { sans: ['Inter', 'ui-sans-serif', 'system-ui', 'sans-serif'] },
+        colors: {
+          background: 'hsl(var(--background))', foreground: 'hsl(var(--foreground))',
+          card: 'hsl(var(--card))', 'card-foreground': 'hsl(var(--card-foreground))',
+          popover: 'hsl(var(--popover))',
+          muted: 'hsl(var(--muted))', 'muted-foreground': 'hsl(var(--muted-foreground))',
+          border: 'hsl(var(--border))', input: 'hsl(var(--input))', ring: 'hsl(var(--ring))',
+          primary: 'hsl(var(--primary))', 'primary-foreground': 'hsl(var(--primary-foreground))',
+          accent: 'hsl(var(--accent))', 'accent-foreground': 'hsl(var(--accent-foreground))',
+        },
+        borderRadius: { xl: '0.75rem', lg: '0.5rem', md: '0.375rem' },
+      } },
+    };
+  </script>
+  <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+  <script src="/dashboard/highcharts.js"></script>
+  <style>
+    :root {
+      --background: 0 0% 100%; --foreground: 240 10% 3.9%;
+      --card: 0 0% 100%; --card-foreground: 240 10% 3.9%;
+      --popover: 0 0% 100%;
+      --muted: 240 4.8% 95.9%; --muted-foreground: 240 3.8% 46.1%;
+      --border: 240 5.9% 90%; --input: 240 5.9% 90%; --ring: 240 5% 65%;
+      --primary: 240 5.9% 10%; --primary-foreground: 0 0% 98%;
+      --accent: 240 4.8% 95.9%; --accent-foreground: 240 5.9% 10%;
+    }
+    .dark {
+      --background: 240 10% 3.9%; --foreground: 0 0% 98%;
+      --card: 240 10% 5.5%; --card-foreground: 0 0% 98%;
+      --popover: 240 10% 5.5%;
+      --muted: 240 3.7% 15.9%; --muted-foreground: 240 5% 64.9%;
+      --border: 240 3.7% 15.9%; --input: 240 3.7% 18%; --ring: 240 4.9% 50%;
+      --primary: 0 0% 98%; --primary-foreground: 240 5.9% 10%;
+      --accent: 240 3.7% 15.9%; --accent-foreground: 0 0% 98%;
+    }
+    * { border-color: hsl(var(--border)); }
+    body { font-feature-settings: "cv11","ss01"; }
+    [x-cloak] { display: none !important; }
+    .scroll-thin::-webkit-scrollbar { width: 7px; height: 7px; }
+    .scroll-thin::-webkit-scrollbar-thumb { background: hsl(var(--border)); border-radius: 9999px; }
+    .scroll-thin::-webkit-scrollbar-track { background: transparent; }
+    /* ── loaders ── */
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .spinner { width: 14px; height: 14px; border: 2px solid hsl(var(--muted-foreground) / .25); border-top-color: hsl(var(--primary)); border-radius: 9999px; animation: spin .6s linear infinite; }
+    @keyframes blink { 0%,100% { opacity: 1; } 50% { opacity: .2; } }
+    .live-dot { display: inline-block; animation: blink 1s ease-in-out infinite; }
+    @keyframes topbar { 0% { left: -45%; } 100% { left: 100%; } }
+    .topbar { position: fixed; top: 0; left: 0; right: 0; height: 2px; z-index: 60; background: hsl(var(--primary) / .15); overflow: hidden; }
+    .topbar::after { content: ''; position: absolute; top: 0; height: 100%; width: 45%; background: hsl(var(--primary)); animation: topbar 1s ease-in-out infinite; }
+  </style>
+</head>
+<body class="bg-background text-foreground font-sans antialiased text-sm">
+<div x-data="app()" x-init="init()" x-cloak class="flex h-screen overflow-hidden">
+
+  <!-- ════════════ LOGIN ════════════ -->
+  <div x-show="needsLogin" class="fixed inset-0 z-[60] bg-background grid place-items-center p-4">
+    <form @submit.prevent="login()" class="w-full max-w-sm rounded-xl border bg-card p-7 shadow-xl space-y-4">
+      <div class="flex items-center gap-2.5">
+        <div class="h-9 w-9 rounded-lg bg-primary text-primary-foreground grid place-items-center font-bold text-sm">IPO</div>
+        <div><div class="font-semibold tracking-tight">IPO Platform</div><div class="text-xs text-muted-foreground">Sign in to the control panel</div></div>
+      </div>
+      <div class="space-y-1">
+        <label class="text-xs font-medium text-muted-foreground">Username</label>
+        <input x-model="loginForm.username" autocomplete="username" class="w-full bg-background border rounded-md px-3 py-2 text-sm focus:ring-2 ring-ring outline-none">
+      </div>
+      <div class="space-y-1">
+        <label class="text-xs font-medium text-muted-foreground">Password</label>
+        <input x-model="loginForm.password" type="password" autocomplete="current-password" class="w-full bg-background border rounded-md px-3 py-2 text-sm focus:ring-2 ring-ring outline-none">
+      </div>
+      <div x-show="loginError" class="text-xs text-rose-500" x-text="loginError"></div>
+      <button type="submit" :disabled="loggingIn" class="w-full py-2 rounded-md bg-primary text-primary-foreground text-sm font-medium hover:opacity-90 disabled:opacity-50" x-text="loggingIn?'Signing in…':'Sign in'"></button>
+    </form>
+  </div>
+
+  <!-- ════════════ TOP LOADER ════════════ -->
+  <div x-show="loading>0" x-transition.opacity class="topbar"></div>
+
+  <!-- ════════════ SIDEBAR ════════════ -->
+  <aside class="hidden md:flex w-60 shrink-0 flex-col border-r bg-card">
+    <div class="h-14 flex items-center gap-2 px-5 border-b">
+      <div class="h-7 w-7 rounded-lg bg-primary text-primary-foreground grid place-items-center font-bold text-xs">IPO</div>
+      <span class="font-semibold tracking-tight">Platform</span>
+    </div>
+    <nav class="flex-1 overflow-y-auto scroll-thin px-3 py-3 space-y-0.5">
+      <template x-for="g in nav" :key="g.section">
+        <div class="mb-2">
+          <div class="px-2 py-1.5 text-[11px] font-medium uppercase tracking-wider text-muted-foreground" x-text="g.section"></div>
+          <template x-for="item in g.items" :key="item.id">
+            <button @click="go(item.id)"
+              :class="page===item.id ? 'bg-accent text-accent-foreground font-medium' : 'text-muted-foreground hover:bg-accent/60 hover:text-foreground'"
+              class="w-full flex items-center gap-2.5 px-2 py-1.5 rounded-md text-sm transition">
+              <svg class="h-4 w-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path :d="item.icon"></path></svg>
+              <span x-text="item.label"></span>
+              <span x-show="item.id==='review' && kpi.review>0" class="ml-auto text-[10px] px-1.5 rounded-full bg-amber-500 text-white" x-text="kpi.review"></span>
+              <span x-show="item.id==='jobs' && runningJobs>0" class="ml-auto text-[10px] px-1.5 rounded-full bg-blue-500 text-white" x-text="runningJobs"></span>
+            </button>
+          </template>
+        </div>
+      </template>
+    </nav>
+    <div class="p-3 border-t flex items-center gap-2 text-xs text-muted-foreground">
+      <span :class="health.ok ? 'text-emerald-500' : 'text-rose-500'">●</span>
+      <span x-text="health.ok ? health.ipos+' IPOs · online' : 'API offline'"></span>
+      <button x-show="authEnabled" @click="logout()" title="Sign out" class="ml-auto hover:text-foreground flex items-center gap-1">
+        <svg class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"/></svg>
+        <span x-text="authUser"></span>
+      </button>
+    </div>
+  </aside>
+
+  <!-- ════════════ MAIN ════════════ -->
+  <div class="flex-1 flex flex-col min-w-0">
+    <!-- topbar -->
+    <header class="h-14 shrink-0 border-b bg-background/80 backdrop-blur flex items-center gap-3 px-4 md:px-6 sticky top-0 z-20">
+      <select x-model="page" @change="go(page)" class="md:hidden bg-card border rounded-md px-2 py-1 text-sm">
+        <template x-for="g in nav" :key="g.section"><optgroup :label="g.section">
+          <template x-for="item in g.items" :key="item.id"><option :value="item.id" x-text="item.label"></option></template>
+        </optgroup></template>
+      </select>
+      <h1 class="text-base font-semibold tracking-tight" x-text="pageTitle()"></h1>
+      <div class="ml-auto flex items-center gap-2">
+        <button @click="refreshAll()" title="Refresh" class="h-9 w-9 grid place-items-center rounded-md border bg-card hover:bg-accent transition">
+          <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/></svg>
+        </button>
+        <button @click="toggleTheme()" title="Theme" class="h-9 w-9 grid place-items-center rounded-md border bg-card hover:bg-accent transition">
+          <svg x-show="!dark" class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg>
+          <svg x-show="dark" class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/></svg>
+        </button>
+      </div>
+    </header>
+
+    <main class="flex-1 overflow-y-auto scroll-thin p-4 md:p-6">
+
+      <!-- ═══════ OVERVIEW ═══════ -->
+      <section x-show="page==='overview'" class="space-y-5">
+        <div class="grid grid-cols-2 lg:grid-cols-4 gap-4">
+          <template x-for="c in kpiCards()" :key="c.label">
+            <div class="rounded-xl border bg-card p-5 cursor-pointer hover:border-foreground/20 transition" @click="c.go && go(c.go)">
+              <div class="flex items-center justify-between">
+                <span class="text-xs font-medium text-muted-foreground" x-text="c.label"></span>
+                <svg class="h-4 w-4 text-muted-foreground" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path :d="c.icon"></path></svg>
+              </div>
+              <div class="mt-2 text-2xl font-bold tracking-tight" :class="c.accent" x-text="c.value"></div>
+              <div class="mt-1 text-xs text-muted-foreground" x-text="c.sub"></div>
+            </div>
+          </template>
+        </div>
+
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
+          <div class="rounded-xl border bg-card p-5 lg:col-span-1">
+            <h3 class="font-semibold text-sm">IPOs by status</h3>
+            <p class="text-xs text-muted-foreground mb-3">Pipeline distribution</p>
+            <div id="chStatus" class="h-56 w-full"></div>
+          </div>
+          <div class="rounded-xl border bg-card p-5 lg:col-span-2">
+            <h3 class="font-semibold text-sm">Top sectors</h3>
+            <p class="text-xs text-muted-foreground mb-3">IPO count by sector</p>
+            <div id="chSector" class="h-56 w-full"></div>
+          </div>
+        </div>
+
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
+          <div class="rounded-xl border bg-card p-5">
+            <h3 class="font-semibold text-sm">Document coverage</h3>
+            <p class="text-xs text-muted-foreground mb-3">IPOs with each doc type</p>
+            <div id="chDocs" class="h-48 w-full"></div>
+          </div>
+          <div class="rounded-xl border bg-card p-5">
+            <h3 class="font-semibold text-sm">Extraction engines</h3>
+            <p class="text-xs text-muted-foreground mb-3">Which pipeline produced results</p>
+            <div id="chPipeline" class="h-48 w-full"></div>
+          </div>
+          <div class="rounded-xl border bg-card p-5">
+            <h3 class="font-semibold text-sm flex items-center justify-between">Top GMP <span class="text-xs font-normal text-muted-foreground">grey market</span></h3>
+            <div class="mt-3 space-y-1.5 max-h-48 overflow-auto scroll-thin">
+              <template x-for="g in stats.gmpLeaders" :key="g.slug">
+                <div class="flex items-center justify-between text-sm py-1 border-b last:border-0">
+                  <span class="truncate mr-2" x-text="g.companyName || g.slug"></span>
+                  <span class="font-semibold text-emerald-500 shrink-0" x-text="'₹'+g.gmp + (g.gmpPct?' ('+g.gmpPct+'%)':'')"></span>
+                </div>
+              </template>
+              <div x-show="!stats.gmpLeaders?.length" class="text-xs text-muted-foreground py-6 text-center">No GMP data yet.</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="rounded-xl border bg-card p-5">
+          <h3 class="font-semibold text-sm mb-3">Recent activity (jobs / 24h trend)</h3>
+          <div id="chJobs" class="h-44 w-full"></div>
+        </div>
+      </section>
+
+      <!-- ═══════ IPOs ═══════ -->
+      <section x-show="page==='ipos'" class="space-y-4">
+        <div class="rounded-xl border bg-card p-3 flex flex-wrap gap-2 items-center">
+          <div class="relative flex-1 min-w-[220px]">
+            <svg class="h-4 w-4 absolute left-2.5 top-2.5 text-muted-foreground" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+            <input x-model.debounce.400ms="ipoFilters.search" @input="loadIpos(1)" placeholder="Search company, symbol, ISIN…" class="w-full bg-background border rounded-md pl-8 pr-3 py-2 text-sm focus:ring-2 ring-ring outline-none">
+          </div>
+          <select x-model="ipoFilters.status" @change="loadIpos(1)" class="bg-background border rounded-md px-2 py-2 text-sm"><option value="">All status</option><template x-for="s in ['upcoming','open','closed','listed']" :key="s"><option :value="s" x-text="s"></option></template></select>
+          <select x-model="ipoFilters.document" @change="loadIpos(1)" class="bg-background border rounded-md px-2 py-2 text-sm"><option value="">Any docs</option><option value="drhp">Has DRHP</option><option value="rhp">Has RHP</option><option value="final">Has Final</option></select>
+          <select x-model="ipoFilters.sort" @change="loadIpos(1)" class="bg-background border rounded-md px-2 py-2 text-sm"><option value="latest">Latest</option><option value="listingDate">Listing date</option><option value="name">Name</option></select>
+        </div>
+
+        <div class="rounded-xl border bg-card overflow-hidden">
+          <table class="w-full text-sm">
+            <thead><tr class="text-left text-muted-foreground border-b text-xs uppercase tracking-wide">
+              <th class="font-medium py-2.5 px-4">Company</th><th class="font-medium">Status</th><th class="font-medium">Type</th><th class="font-medium">Price band</th><th class="font-medium">Docs</th><th></th>
+            </tr></thead>
+            <tbody>
+              <template x-for="ipo in ipos" :key="ipo.slug">
+                <tr class="border-b last:border-0 hover:bg-accent/40 transition">
+                  <td class="py-2.5 px-4">
+                    <button @click="openIpo(ipo.slug)" class="font-medium hover:underline text-left" x-text="ipo.companyName || ipo.slug"></button>
+                    <div class="text-xs text-muted-foreground" x-text="ipo.symbol || ipo.isin || ''"></div>
+                  </td>
+                  <td><span class="text-[11px] px-2 py-0.5 rounded-full border" :class="statusClass(ipo.status)" x-text="ipo.status || '—'"></span></td>
+                  <td class="text-xs text-muted-foreground" x-text="ipo.issueType || '—'"></td>
+                  <td class="text-xs" x-text="cell(ipo.priceBand) || '—'"></td>
+                  <td><template x-for="d in Object.keys(ipo.documents||{})" :key="d"><span class="inline-block text-[10px] px-1.5 py-0.5 mr-1 rounded bg-muted text-muted-foreground uppercase" x-text="d"></span></template></td>
+                  <td class="text-right pr-4"><button @click="openExtractForm(ipo)" class="text-xs px-2.5 py-1 rounded-md bg-primary text-primary-foreground hover:opacity-90">Extract</button></td>
+                </tr>
+              </template>
+              <tr x-show="!ipos.length"><td colspan="6" class="text-center text-muted-foreground py-10">No IPOs match.</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="flex items-center justify-between text-sm" x-show="pagination.total">
+          <span class="text-muted-foreground" x-text="`${ipos.length} of ${pagination.total}`"></span>
+          <div class="flex gap-2">
+            <button @click="loadIpos(pagination.page-1)" :disabled="pagination.page<=1" class="px-3 py-1.5 rounded-md border bg-card disabled:opacity-40 hover:bg-accent">Prev</button>
+            <span class="px-2 py-1.5 text-muted-foreground" x-text="'Page '+pagination.page"></span>
+            <button @click="loadIpos(pagination.page+1)" :disabled="!pagination.hasMore" class="px-3 py-1.5 rounded-md border bg-card disabled:opacity-40 hover:bg-accent">Next</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- ═══════ EXTRACTIONS / REVIEW ═══════ -->
+      <section x-show="page==='review'" class="space-y-4">
+        <div class="flex gap-2 items-center">
+          <div class="inline-flex rounded-md border bg-card p-0.5">
+            <button @click="exFilter='review';loadExtractions()" :class="exFilter==='review'?'bg-accent text-accent-foreground':'text-muted-foreground'" class="px-3 py-1.5 rounded text-sm font-medium">Review queue</button>
+            <button @click="exFilter='';loadExtractions()" :class="exFilter===''?'bg-accent text-accent-foreground':'text-muted-foreground'" class="px-3 py-1.5 rounded text-sm font-medium">All</button>
+          </div>
+          <span class="text-xs text-muted-foreground" x-text="extractions.length+' shown'"></span>
+        </div>
+        <div class="rounded-xl border bg-card overflow-hidden">
+          <table class="w-full text-sm">
+            <thead><tr class="text-left text-muted-foreground border-b text-xs uppercase tracking-wide">
+              <th class="font-medium py-2.5 px-4">Company</th><th class="font-medium">Doc</th><th class="font-medium">Pipeline</th><th class="font-medium">Status</th><th class="font-medium">Extracted</th><th></th>
+            </tr></thead>
+            <tbody>
+              <template x-for="e in extractions" :key="e.ipoSlug+e.docType+e.pipeline">
+                <tr class="border-b last:border-0 hover:bg-accent/40">
+                  <td class="py-2.5 px-4 font-medium" x-text="e.companyName || e.ipoSlug"></td>
+                  <td class="uppercase text-xs text-muted-foreground" x-text="e.docType"></td>
+                  <td class="text-xs text-muted-foreground" x-text="e.pipeline"></td>
+                  <td><span class="text-[11px] px-2 py-0.5 rounded-full border" :class="exStatusClass(e.status)" x-text="e.status"></span></td>
+                  <td class="text-xs text-muted-foreground" x-text="fmtDate(e.extractedAt)"></td>
+                  <td class="text-right pr-4"><button @click="openExtraction(e)" class="text-xs px-2.5 py-1 rounded-md border bg-card hover:bg-accent">Open</button></td>
+                </tr>
+              </template>
+              <tr x-show="!extractions.length"><td colspan="6" class="text-center text-muted-foreground py-10">Nothing here.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- ═══════ JOBS ═══════ -->
+      <section x-show="page==='jobs'" class="space-y-4">
+        <div class="flex gap-2 items-center flex-wrap">
+          <select x-model="jobFilters.type" @change="loadJobs()" class="bg-card border rounded-md px-2 py-2 text-sm"><option value="">All types</option><template x-for="t in ['scrape','extraction','extraction-bulk','gmp','historical','tool-toc','tool-locate','tool-markdown','tool-text','tool-suggest-schema']" :key="t"><option :value="t" x-text="t"></option></template></select>
+          <select x-model="jobFilters.status" @change="loadJobs()" class="bg-card border rounded-md px-2 py-2 text-sm"><option value="">All status</option><option value="running">running</option><option value="completed">completed</option><option value="failed">failed</option></select>
+          <label class="text-sm flex items-center gap-1.5 text-muted-foreground"><input type="checkbox" x-model="jobAutoRefresh" class="accent-primary"> auto-refresh</label>
+        </div>
+        <div class="grid lg:grid-cols-2 gap-4">
+          <div class="rounded-xl border bg-card overflow-hidden self-start">
+            <table class="w-full text-sm">
+              <thead><tr class="text-left text-muted-foreground border-b text-xs uppercase tracking-wide"><th class="font-medium py-2.5 px-4">Type</th><th class="font-medium">Status</th><th class="font-medium">Started</th><th class="font-medium">Dur</th></tr></thead>
+              <tbody>
+                <template x-for="j in jobs" :key="j.jobId">
+                  <tr @click="openJob(j.jobId)" class="border-b last:border-0 hover:bg-accent/40 cursor-pointer" :class="activeJob?.jobId===j.jobId?'bg-accent/60':''">
+                    <td class="py-2.5 px-4 font-medium" x-text="j.type"></td>
+                    <td><span class="text-[11px] px-2 py-0.5 rounded-full border" :class="jobStatusClass(j.status)" x-text="j.status"></span></td>
+                    <td class="text-xs text-muted-foreground" x-text="fmtDate(j.createdAt)"></td>
+                    <td class="text-xs text-muted-foreground" x-text="j.durationMs?Math.round(j.durationMs/1000)+'s':'—'"></td>
+                  </tr>
+                </template>
+                <tr x-show="!jobs.length"><td colspan="4" class="text-center text-muted-foreground py-10">No jobs.</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <div x-show="activeJob" class="rounded-xl border bg-zinc-950 text-zinc-100 self-start max-h-[70vh] flex flex-col overflow-hidden">
+            <div class="flex items-center justify-between px-4 py-2.5 border-b border-zinc-800 text-zinc-400 text-xs shrink-0">
+              <span class="flex items-center gap-2">
+                <span x-show="activeJob?.status==='running'" class="spinner"></span>
+                <span x-text="activeJob ? activeJob.type+' · '+activeJob.status : ''"></span>
+              </span>
+              <span class="font-mono text-zinc-600" x-text="activeJob?.jobId"></span>
+            </div>
+            <div x-ref="jobLog" x-effect="activeJob?.logs?.length; $nextTick(()=>$refs.jobLog && ($refs.jobLog.scrollTop=$refs.jobLog.scrollHeight))" class="flex-1 overflow-auto scroll-thin p-4 font-mono text-xs space-y-0.5">
+              <template x-for="(l,i) in (activeJob?.logs||[])" :key="i"><div class="flex gap-2"><span class="text-zinc-600 shrink-0" x-text="(l.at||'').slice(11,19)"></span> <span :class="logClass(l.msg)" x-text="l.msg"></span></div></template>
+              <div x-show="activeJob?.status==='running'" class="flex items-center gap-1.5 text-zinc-500 pt-1"><span class="live-dot">▍</span><span>running…</span></div>
+              <div x-show="!(activeJob?.logs||[]).length && activeJob?.status!=='running'" class="text-zinc-600">No logs.</div>
+              <div x-show="activeJob?.error" class="text-rose-400 mt-2" x-text="'ERROR: '+(activeJob?.error||'')"></div>
+              <div x-show="activeJob?.result" class="text-emerald-400 mt-2 whitespace-pre-wrap" x-text="JSON.stringify(activeJob?.result,null,2)"></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ═══════ SCHEMA EDITOR ═══════ -->
+      <section x-show="page==='schema'" class="space-y-4 max-w-4xl">
+        <!-- header card -->
+        <div class="rounded-xl border bg-card p-5">
+          <div class="flex items-start gap-4 flex-wrap">
+            <div class="flex-1 min-w-[240px]">
+              <h2 class="font-semibold">What data we capture</h2>
+              <p class="text-sm text-muted-foreground mt-0.5">Each item below is one piece of data pulled from every IPO document. Add or remove items here — changes save to the database and apply on the next extraction.</p>
+              <div class="flex gap-4 mt-3 text-sm">
+                <span><span class="font-semibold" x-text="Object.values(schemaDraft).filter(f=>f.type!=='objectList').length"></span> <span class="text-muted-foreground">fields</span></span>
+                <span><span class="font-semibold" x-text="Object.values(schemaDraft).filter(f=>f.type==='objectList').length"></span> <span class="text-muted-foreground">tables</span></span>
+              </div>
+            </div>
+            <div class="flex gap-2">
+              <button @click="addFieldOpen=true" class="px-3 py-2 rounded-md bg-primary text-primary-foreground text-sm font-medium hover:opacity-90 flex items-center gap-1.5">
+                <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg> Add data
+              </button>
+              <button @click="saveSchema()" class="px-3 py-2 rounded-md border bg-card text-sm hover:bg-accent" title="Save all changes">Save</button>
+            </div>
+          </div>
+          <div class="flex items-center gap-2 mt-4 flex-wrap">
+            <div class="relative flex-1 min-w-[200px]">
+              <svg class="h-4 w-4 absolute left-2.5 top-2.5 text-muted-foreground" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+              <input x-model="schemaSearch" placeholder="Search data points…" class="w-full bg-background border rounded-md pl-8 pr-3 py-1.5 text-sm">
+            </div>
+            <button @click="schemaJsonMode=!schemaJsonMode" class="px-3 py-1.5 rounded-md border bg-card text-xs hover:bg-accent text-muted-foreground" x-text="schemaJsonMode?'← Simple view':'Advanced (JSON)'"></button>
+            <button @click="resetSchema()" class="px-3 py-1.5 rounded-md text-xs text-rose-500 hover:bg-rose-500/10">Reset to default</button>
+          </div>
+        </div>
+
+        <div x-show="schemaJsonMode" class="rounded-xl border bg-card p-3">
+          <textarea x-model="schemaJsonText" rows="24" class="w-full bg-background border rounded-md p-3 font-mono text-xs scroll-thin" spellcheck="false"></textarea>
+          <p class="text-xs text-muted-foreground mt-2">Full field registry as JSON. Save validates server-side.</p>
+        </div>
+
+        <div x-show="!schemaJsonMode" class="rounded-xl border bg-card divide-y">
+          <template x-for="key in filteredSchemaKeys()" :key="key">
+            <div class="p-4">
+              <div class="flex items-start gap-3">
+                <div class="flex-1 min-w-0">
+                  <div class="flex items-center gap-2 flex-wrap">
+                    <span class="font-medium text-sm" x-text="prettyKey(key)"></span>
+                    <span class="text-[10px] px-1.5 py-0.5 rounded-full border font-medium" :class="typePill(schemaDraft[key].type)" x-text="typeLabel(schemaDraft[key].type)"></span>
+                    <span class="font-mono text-[10px] text-muted-foreground" x-text="key"></span>
+                    <span x-show="schemaDraft[key].mergeKey" class="text-[10px] px-1.5 py-0.5 rounded-full bg-blue-500/10 text-blue-500" x-text="'groups by '+schemaDraft[key].mergeKey"></span>
+                  </div>
+                  <div class="flex gap-2 mt-2">
+                    <input x-model="schemaDraft[key].description" placeholder="what is this? (helps the AI find it)" class="flex-1 bg-background border rounded-md px-2.5 py-1.5 text-xs">
+                    <select x-show="schemaDraft[key].type==='string'" x-model="schemaDraft[key].format" class="bg-background border rounded-md px-2 py-1.5 text-xs" title="value format">
+                      <option value="">plain text</option><template x-for="f in formats" :key="f"><option :value="f" x-text="f"></option></template>
+                    </select>
+                  </div>
+                  <div x-show="schemaDraft[key].type==='objectList'" class="mt-2.5 pl-3 border-l-2 space-y-1.5">
+                    <div class="text-[11px] uppercase tracking-wide text-muted-foreground">Columns</div>
+                    <template x-for="sk in Object.keys(schemaDraft[key].fields||{})" :key="sk">
+                      <div class="flex items-center gap-2">
+                        <span class="text-xs text-muted-foreground w-28 truncate" x-text="sk"></span>
+                        <input x-model="schemaDraft[key].fields[sk].description" placeholder="description" class="flex-1 bg-background border rounded-md px-2 py-1 text-xs">
+                        <select x-model="schemaDraft[key].fields[sk].format" class="bg-background border rounded-md px-1.5 py-1 text-xs"><option value="">—</option><template x-for="f in formats" :key="f"><option :value="f" x-text="f"></option></template></select>
+                        <button @click="delSubField(key,sk)" class="text-muted-foreground hover:text-rose-500 text-xs px-1">✕</button>
+                      </div>
+                    </template>
+                    <button @click="addSubField(key)" class="text-xs text-muted-foreground hover:text-foreground">+ add column</button>
+                  </div>
+                </div>
+                <button @click="delField(key)" title="Remove" class="text-muted-foreground hover:text-rose-500 shrink-0">
+                  <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+                </button>
+              </div>
+            </div>
+          </template>
+          <div x-show="!filteredSchemaKeys().length" class="p-8 text-center text-sm text-muted-foreground">No data points match your search.</div>
+        </div>
+      </section>
+
+      <!-- ═══════ SECTIONS ═══════ -->
+      <section x-show="page==='sections'" class="space-y-4 max-w-4xl">
+        <div class="rounded-xl border bg-card p-5">
+          <div class="flex items-start gap-4 flex-wrap">
+            <div class="flex-1 min-w-[240px]">
+              <h2 class="font-semibold">Which parts of the PDF to read</h2>
+              <p class="text-sm text-muted-foreground mt-0.5">A prospectus is 300–800 pages. Turn on only the sections you need — the green ones are read on every extraction. “Aliases” are the heading names we match in the Table of Contents.</p>
+              <div class="flex gap-4 mt-3 text-sm">
+                <span><span class="font-semibold text-emerald-500" x-text="sectionDraft.targets.length"></span> <span class="text-muted-foreground">active</span></span>
+                <span><span class="font-semibold" x-text="Object.keys(sectionDraft.aliases).length"></span> <span class="text-muted-foreground">total</span></span>
+              </div>
+            </div>
+            <div class="flex gap-2">
+              <button @click="addSectionOpen=true" class="px-3 py-2 rounded-md bg-primary text-primary-foreground text-sm font-medium hover:opacity-90 flex items-center gap-1.5"><svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg> Add section</button>
+              <button @click="saveSections()" class="px-3 py-2 rounded-md border bg-card text-sm hover:bg-accent">Save</button>
+            </div>
+          </div>
+          <div class="flex items-center gap-2 mt-4 flex-wrap">
+            <div class="relative flex-1 min-w-[200px]">
+              <svg class="h-4 w-4 absolute left-2.5 top-2.5 text-muted-foreground" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+              <input x-model="sectionSearch" placeholder="Search sections…" class="w-full bg-background border rounded-md pl-8 pr-3 py-1.5 text-sm">
+            </div>
+            <button @click="resetSections()" class="px-3 py-1.5 rounded-md text-xs text-rose-500 hover:bg-rose-500/10">Reset to default</button>
+          </div>
+        </div>
+        <div class="rounded-xl border bg-card divide-y">
+          <template x-for="key in filteredSectionKeys()" :key="key">
+            <div class="p-3.5 flex items-center gap-3" :class="sectionDraft.targets.includes(key)?'':'opacity-60'">
+              <!-- switch -->
+              <button @click="toggleTarget(key)" :class="sectionDraft.targets.includes(key)?'bg-emerald-500':'bg-muted'" class="relative h-5 w-9 rounded-full transition shrink-0" :title="sectionDraft.targets.includes(key)?'active':'off'">
+                <span :class="sectionDraft.targets.includes(key)?'translate-x-4':'translate-x-0.5'" class="absolute top-0.5 h-4 w-4 rounded-full bg-white shadow transition"></span>
+              </button>
+              <span class="text-sm font-medium w-48 shrink-0 truncate" x-text="prettyKey(key)" :title="key"></span>
+              <input :value="sectionDraft.aliases[key].join(', ')" @change="sectionDraft.aliases[key]=$event.target.value.split(',').map(s=>s.trim()).filter(Boolean)" class="flex-1 bg-background border rounded-md px-2.5 py-1.5 text-xs" placeholder="heading names to match, comma-separated">
+              <button @click="delSection(key)" class="text-muted-foreground hover:text-rose-500 shrink-0"><svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/></svg></button>
+            </div>
+          </template>
+          <div x-show="!filteredSectionKeys().length" class="p-8 text-center text-sm text-muted-foreground">No sections match your search.</div>
+        </div>
+      </section>
+
+      <!-- ═══════ PDF LAB ═══════ -->
+      <section x-show="page==='lab'" class="space-y-4">
+        <div class="rounded-xl border bg-card p-3 flex flex-wrap gap-2 items-center">
+          <div class="relative flex-1 min-w-[220px]">
+            <input x-model.debounce.400ms="lab.search" @input="labSearch()" placeholder="Pick an IPO…" class="w-full bg-background border rounded-md px-3 py-2 text-sm">
+            <div x-show="lab.results.length && lab.search && !lab.slug" class="absolute z-30 mt-1 w-full bg-popover border rounded-md shadow-lg max-h-60 overflow-auto scroll-thin">
+              <template x-for="r in lab.results" :key="r.slug">
+                <button @click="labPick(r)" class="w-full text-left px-3 py-2 hover:bg-accent text-sm border-b last:border-0">
+                  <span x-text="r.companyName||r.slug"></span>
+                  <span class="text-xs text-muted-foreground ml-1" x-text="Object.keys(r.documents||{}).join('/')"></span>
+                </button>
+              </template>
+            </div>
+          </div>
+          <select x-model="lab.docType" :disabled="!lab.slug" class="bg-background border rounded-md px-2 py-2 text-sm"><template x-for="d in ['auto','final','rhp','drhp']" :key="d"><option :value="d" x-text="d"></option></template></select>
+          <span x-show="lab.slug" class="text-xs text-muted-foreground" x-text="lab.companyName"></span>
+          <button x-show="lab.slug" @click="labClear()" class="text-xs text-muted-foreground hover:text-foreground">clear</button>
+        </div>
+
+        <div x-show="lab.slug" class="grid lg:grid-cols-2 gap-4">
+          <!-- preview -->
+          <div class="rounded-xl border bg-card overflow-hidden">
+            <div class="px-4 py-2 border-b text-xs text-muted-foreground flex justify-between"><span>PDF preview</span><a :href="lab.slug?labPdfUrl():'#'" target="_blank" class="hover:text-foreground">open ↗</a></div>
+            <iframe :src="lab.slug?labPdfUrl():'about:blank'" class="w-full h-[60vh] bg-white"></iframe>
+          </div>
+          <!-- tools -->
+          <div class="space-y-4">
+            <div class="rounded-xl border bg-card p-4 space-y-3">
+              <h3 class="font-semibold text-sm">Inspect</h3>
+              <div class="flex flex-wrap gap-2">
+                <button @click="runTool('/tools/toc',{},'toc')" class="px-3 py-1.5 rounded-md border bg-card text-sm hover:bg-accent">Find ToC pages</button>
+                <button @click="runTool('/tools/locate',{},'locate')" class="px-3 py-1.5 rounded-md border bg-card text-sm hover:bg-accent">Locate sections</button>
+              </div>
+              <div class="flex items-end gap-2">
+                <div><label class="text-xs text-muted-foreground">From page</label><input type="number" x-model.number="lab.start" min="0" class="w-20 bg-background border rounded-md px-2 py-1 text-sm block"></div>
+                <div><label class="text-xs text-muted-foreground">To page</label><input type="number" x-model.number="lab.end" min="0" class="w-20 bg-background border rounded-md px-2 py-1 text-sm block"></div>
+                <button @click="runTool('/tools/markdown',{start:lab.start,end:lab.end},'markdown')" class="px-3 py-1.5 rounded-md border bg-card text-sm hover:bg-accent">→ Markdown</button>
+                <button @click="runTool('/tools/text',{start:lab.start,end:lab.end},'text')" class="px-3 py-1.5 rounded-md border bg-card text-sm hover:bg-accent">→ Text</button>
+              </div>
+              <p class="text-[11px] text-muted-foreground">Page ranges are 0-indexed, capped at 12 pages.</p>
+            </div>
+
+            <div class="rounded-xl border bg-card p-4 space-y-2">
+              <h3 class="font-semibold text-sm flex items-center gap-1.5">
+                <svg class="h-4 w-4 text-blue-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v18M3 12h18"/></svg>
+                Ask the LLM about this PDF
+              </h3>
+              <p class="text-xs text-muted-foreground">Describe data you want to capture. The LLM scans the page range and proposes schema fields you can add.</p>
+              <textarea x-model="lab.prompt" rows="3" placeholder="e.g. I want a table of the company's outstanding loans — lender, amount, interest rate" class="w-full bg-background border rounded-md px-2 py-1.5 text-sm"></textarea>
+              <button @click="runTool('/tools/suggest-schema',{prompt:lab.prompt,start:lab.start,end:lab.end},'suggest')" :disabled="!lab.prompt" class="px-3 py-1.5 rounded-md bg-primary text-primary-foreground text-sm hover:opacity-90 disabled:opacity-40">Analyze & suggest →</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- lab result -->
+        <div x-show="lab.job" class="rounded-xl border bg-card overflow-hidden">
+          <div class="px-4 py-2 border-b flex items-center justify-between text-sm">
+            <span class="font-medium" x-text="'Tool: '+(lab.kind||'')"></span>
+            <span class="flex items-center gap-2">
+              <span x-show="lab.job?.status==='running'" class="spinner"></span>
+              <span class="text-[11px] px-2 py-0.5 rounded-full border" :class="jobStatusClass(lab.job?.status)" x-text="lab.job?.status"></span>
+            </span>
+          </div>
+          <!-- live log while running -->
+          <div x-show="lab.job?.status==='running'" x-ref="labLog" x-effect="lab.job?.logs?.length; $nextTick(()=>$refs.labLog && ($refs.labLog.scrollTop=$refs.labLog.scrollHeight))" class="bg-zinc-950 text-zinc-100 p-3 font-mono text-xs max-h-40 overflow-auto scroll-thin space-y-0.5">
+            <template x-for="(l,i) in (lab.job?.logs||[])" :key="i"><div class="flex gap-2"><span class="text-zinc-600 shrink-0" x-text="(l.at||'').slice(11,19)"></span> <span :class="logClass(l.msg)" x-text="l.msg"></span></div></template>
+            <div class="flex items-center gap-1.5 text-zinc-500 pt-1"><span class="live-dot">▍</span><span>running…</span></div>
+          </div>
+          <div x-show="lab.job?.error" class="p-4 text-rose-500 text-sm" x-text="lab.job?.error"></div>
+
+          <!-- results by kind -->
+          <div x-show="lab.job?.status==='completed'" class="p-4">
+            <!-- toc -->
+            <template x-if="lab.kind==='toc'">
+              <div class="text-sm space-y-2">
+                <div>ToC pages: <span class="font-mono" x-text="(lab.job.result.tocPages||[]).join(', ')||'none'"></span> · total <span x-text="lab.job.result.totalPages"></span></div>
+                <div class="flex flex-wrap gap-1.5">
+                  <template x-for="[s,info] in Object.entries(lab.job.result.mapping||{})" :key="s">
+                    <span class="text-[11px] px-2 py-0.5 rounded border" x-text="s.toLowerCase()+' → p'+info.printedPage"></span>
+                  </template>
+                </div>
+              </div>
+            </template>
+            <!-- locate -->
+            <template x-if="lab.kind==='locate'">
+              <div class="flex flex-wrap gap-1.5 text-sm">
+                <template x-for="[s,info] in Object.entries(lab.job.result.ranges||{})" :key="s">
+                  <span class="text-[11px] px-2 py-0.5 rounded border" :class="info.range?'bg-emerald-500/10 text-emerald-500':'bg-rose-500/10 text-rose-500'" x-text="s.toLowerCase()+(info.range?(' '+info.range[0]+'–'+info.range[1]):' ✕')+' ('+info.method+')'"></span>
+                </template>
+              </div>
+            </template>
+            <!-- markdown / text -->
+            <template x-if="lab.kind==='markdown' || lab.kind==='text'">
+              <pre class="bg-background border rounded-md p-3 text-xs max-h-[50vh] overflow-auto scroll-thin whitespace-pre-wrap" x-text="lab.kind==='markdown' ? lab.job.result.markdown : (lab.job.result.pages||[]).map(p=>'=== PAGE '+p.page+' ===\n'+p.text).join('\n\n')"></pre>
+            </template>
+            <!-- suggest-schema -->
+            <template x-if="lab.kind==='suggest'">
+              <div class="space-y-3 text-sm">
+                <div :class="lab.job.result.found?'text-emerald-500':'text-amber-500'" x-text="(lab.job.result.found?'✓ Found: ':'⚠ ')+lab.job.result.explanation"></div>
+                <div x-show="lab.job.result.evidence?.length" class="text-xs text-muted-foreground space-y-0.5">
+                  <template x-for="(ev,i) in lab.job.result.evidence" :key="i"><div class="pl-2 border-l-2 italic" x-text="ev"></div></template>
+                </div>
+                <div class="space-y-2">
+                  <template x-for="[fk,def] in Object.entries(lab.job.result.proposedFields||{})" :key="fk">
+                    <div class="rounded-lg border p-3 flex items-start gap-3">
+                      <div class="flex-1 min-w-0">
+                        <div class="flex items-center gap-2"><span class="font-mono font-medium" x-text="fk"></span><span class="text-[10px] px-1.5 py-0.5 rounded bg-muted text-muted-foreground" x-text="def.type"></span></div>
+                        <div class="text-xs text-muted-foreground mt-0.5" x-text="def.description"></div>
+                        <div x-show="def.fields" class="text-[11px] text-muted-foreground mt-1" x-text="def.fields?('cols: '+Object.keys(def.fields).join(', ')):''"></div>
+                      </div>
+                      <button @click="applyProposed(fk,def)" class="text-xs px-2.5 py-1 rounded-md bg-primary text-primary-foreground hover:opacity-90 shrink-0">Add to schema</button>
+                    </div>
+                  </template>
+                  <div x-show="!Object.keys(lab.job.result.proposedFields||{}).length" class="text-xs text-muted-foreground">No new fields proposed.</div>
+                </div>
+              </div>
+            </template>
+          </div>
+        </div>
+      </section>
+
+      <!-- ═══════ CONTROL ═══════ -->
+      <section x-show="page==='control'" class="grid md:grid-cols-2 gap-4">
+        <div class="rounded-xl border bg-card p-5 space-y-3">
+          <h3 class="font-semibold">Scrape sources</h3>
+          <div class="flex flex-wrap gap-3 text-sm">
+            <template x-for="s in allSources" :key="s"><label class="flex items-center gap-1.5"><input type="checkbox" :value="s" x-model="scrapeForm.sources" class="accent-primary"> <span x-text="s"></span></label></template>
+          </div>
+          <label class="text-sm flex items-center gap-1.5 text-muted-foreground"><input type="checkbox" x-model="scrapeForm.dryRun" class="accent-primary"> dry run (no DB writes)</label>
+          <button @click="doScrape()" class="px-4 py-2 rounded-md bg-primary text-primary-foreground text-sm hover:opacity-90">Run scrape →</button>
+        </div>
+        <div class="rounded-xl border bg-card p-5 space-y-3">
+          <h3 class="font-semibold">Bulk extraction</h3>
+          <div class="flex gap-2">
+            <select x-model="bulkForm.pipeline" class="bg-background border rounded-md px-2 py-1.5 text-sm flex-1"><template x-for="p in ['cascade','firecrawl','gemini','both']" :key="p"><option :value="p" x-text="p"></option></template></select>
+            <select x-model="bulkForm.docType" class="bg-background border rounded-md px-2 py-1.5 text-sm flex-1"><template x-for="d in ['auto','final','rhp','drhp']" :key="d"><option :value="d" x-text="d"></option></template></select>
+          </div>
+          <select x-model="bulkForm.status" class="bg-background border rounded-md px-2 py-1.5 text-sm w-full"><option value="">All IPOs with docs</option><template x-for="s in ['upcoming','open','closed','listed']" :key="s"><option :value="s" x-text="'status: '+s"></option></template></select>
+          <label class="text-sm flex items-center gap-1.5 text-muted-foreground"><input type="checkbox" x-model="bulkForm.force" class="accent-primary"> force re-extract</label>
+          <button @click="doBulkExtract()" class="px-4 py-2 rounded-md bg-primary text-primary-foreground text-sm hover:opacity-90">Run bulk extract →</button>
+        </div>
+        <div class="rounded-xl border bg-card p-5 space-y-3">
+          <h3 class="font-semibold">Refresh GMP</h3>
+          <p class="text-xs text-muted-foreground">Grey-market premium for open/upcoming IPOs.</p>
+          <button @click="post('/ipos/gmp',{},'GMP refresh')" class="px-4 py-2 rounded-md border bg-card text-sm hover:bg-accent">Run GMP →</button>
+        </div>
+        <div class="rounded-xl border bg-card p-5 space-y-3">
+          <h3 class="font-semibold">Historical prices</h3>
+          <p class="text-xs text-muted-foreground">Post-listing price data for listed IPOs.</p>
+          <button @click="post('/ipos/historical',{status:'listed'},'Historical refresh')" class="px-4 py-2 rounded-md border bg-card text-sm hover:bg-accent">Run historical →</button>
+        </div>
+      </section>
+
+    </main>
+  </div>
+
+  <!-- ════════════ TOAST ════════════ -->
+  <div x-show="toast.msg" x-transition class="fixed bottom-4 right-4 z-50">
+    <div :class="toast.err?'border-rose-500/40 text-rose-500':'border-emerald-500/40 text-emerald-600'" class="bg-popover border rounded-lg shadow-lg px-4 py-2.5 text-sm max-w-md" x-text="toast.msg"></div>
+  </div>
+
+  <!-- ════════════ IPO DRAWER ════════════ -->
+  <div x-show="ipoDetail" x-transition.opacity class="fixed inset-0 bg-black/50 z-40 flex justify-end" @click.self="ipoDetail=null">
+    <div class="bg-card w-full max-w-2xl h-full overflow-auto scroll-thin border-l p-6">
+      <template x-if="ipoDetail"><div>
+        <div class="flex justify-between items-start mb-4">
+          <div><h2 class="text-xl font-bold tracking-tight" x-text="ipoDetail.companyName||ipoDetail.slug"></h2><div class="text-sm text-muted-foreground" x-text="ipoDetail.symbol||ipoDetail.isin||''"></div></div>
+          <button @click="ipoDetail=null" class="text-muted-foreground hover:text-foreground text-2xl leading-none">×</button>
+        </div>
+        <div class="flex gap-2 mb-4">
+          <button @click="openExtractForm(ipoDetail)" class="px-3 py-1.5 rounded-md bg-primary text-primary-foreground text-sm">Extract</button>
+          <button @click="openInLab(ipoDetail)" class="px-3 py-1.5 rounded-md border bg-card text-sm hover:bg-accent">Open in PDF Lab</button>
+          <button @click="viewExtractions(ipoDetail.slug)" class="px-3 py-1.5 rounded-md border bg-card text-sm hover:bg-accent">Extractions</button>
+          <button @click="deleteIpo(ipoDetail.slug)" class="px-3 py-1.5 rounded-md border border-rose-400/40 text-rose-500 text-sm ml-auto hover:bg-rose-500/10">Delete</button>
+        </div>
+        <div class="mb-4">
+          <h3 class="text-xs uppercase tracking-wide text-muted-foreground mb-1.5">Documents</h3>
+          <div class="flex flex-wrap gap-2">
+            <template x-for="[k,v] in Object.entries(ipoDetail.documents||{})" :key="k"><a :href="v.url" target="_blank" class="text-xs px-2 py-1 rounded-md border bg-card hover:bg-accent"><span class="uppercase font-medium" x-text="k"></span> ↗ <span class="text-muted-foreground" x-text="v.source"></span></a></template>
+            <span x-show="!Object.keys(ipoDetail.documents||{}).length" class="text-sm text-muted-foreground">No documents.</span>
+          </div>
+        </div>
+        <div class="grid grid-cols-2 gap-x-4 gap-y-1.5 text-sm">
+          <template x-for="[k,v] in detailRows(ipoDetail)" :key="k"><template x-if="v"><div class="contents"><div class="text-muted-foreground" x-text="k"></div><div class="font-medium break-words" x-text="v"></div></div></template></template>
+        </div>
+      </div></template>
+    </div>
+  </div>
+
+  <!-- ════════════ EXTRACT FORM ════════════ -->
+  <div x-show="extractForm" x-transition.opacity class="fixed inset-0 bg-black/50 z-40 grid place-items-center" @click.self="extractForm=null">
+    <template x-if="extractForm">
+    <div class="bg-card rounded-xl border shadow-xl p-6 w-full max-w-md space-y-4">
+      <h3 class="font-semibold" x-text="'Extract: '+(extractForm?.name||'')"></h3>
+      <div><label class="text-xs text-muted-foreground">Pipeline</label><select x-model="extractForm.pipeline" class="bg-background border rounded-md px-2 py-1.5 text-sm w-full"><template x-for="p in ['cascade','firecrawl','gemini','both']" :key="p"><option :value="p" x-text="p"></option></template></select></div>
+      <div><label class="text-xs text-muted-foreground">Document type</label><select x-model="extractForm.docType" class="bg-background border rounded-md px-2 py-1.5 text-sm w-full"><template x-for="d in ['auto','final','rhp','drhp']" :key="d"><option :value="d" x-text="d"></option></template></select></div>
+      <label class="text-sm flex items-center gap-1.5 text-muted-foreground"><input type="checkbox" x-model="extractForm.force" class="accent-primary"> force re-extract</label>
+      <div class="flex gap-2 justify-end"><button @click="extractForm=null" class="px-3 py-1.5 rounded-md border bg-card text-sm">Cancel</button><button @click="doExtract()" class="px-4 py-1.5 rounded-md bg-primary text-primary-foreground text-sm">Run →</button></div>
+    </div>
+    </template>
+  </div>
+
+  <!-- ════════════ EXTRACTION VIEWER/EDITOR ════════════ -->
+  <div x-show="exView" x-transition.opacity class="fixed inset-0 bg-black/60 z-40 flex justify-center items-start overflow-auto py-8" @click.self="exView=null">
+    <div class="bg-card rounded-xl border shadow-xl w-full max-w-4xl">
+      <template x-if="exView"><div>
+        <div class="flex justify-between items-center p-4 border-b sticky top-0 bg-card z-10 rounded-t-xl">
+          <div><h3 class="font-semibold" x-text="exView.result?.company_name||exView.ipoSlug"></h3>
+            <div class="text-xs text-muted-foreground"><span class="uppercase" x-text="exView.docType"></span> · <span x-text="exView.pipeline"></span> · <span class="px-1.5 rounded" :class="exStatusClass(exView.status)" x-text="exView.status"></span></div></div>
+          <div class="flex gap-2">
+            <button @click="editing=!editing" class="px-3 py-1.5 rounded-md border bg-card text-sm" x-text="editing?'View':'Edit'"></button>
+            <button x-show="editing" @click="saveExtraction()" class="px-3 py-1.5 rounded-md bg-emerald-600 text-white text-sm">Save</button>
+            <button x-show="exView.status==='review'" @click="resolveReview()" class="px-3 py-1.5 rounded-md bg-amber-500 text-white text-sm">Mark reviewed</button>
+            <button @click="exView=null;editing=false" class="text-muted-foreground hover:text-foreground text-2xl leading-none">×</button>
+          </div>
+        </div>
+        <div class="px-4 py-2 bg-muted/40 border-b text-xs flex flex-wrap gap-1.5" x-show="exView.sections">
+          <span class="text-muted-foreground uppercase">located:</span>
+          <template x-for="[sec,info] in Object.entries(exView.sections||{})" :key="sec"><span class="px-1.5 py-0.5 rounded" :class="info.range?'bg-emerald-500/10 text-emerald-500':'bg-rose-500/10 text-rose-500'" x-text="sec.toLowerCase()+' '+(info.method||'')"></span></template>
+        </div>
+        <div class="p-4 max-h-[60vh] overflow-auto scroll-thin space-y-1">
+          <template x-for="key in schemaKeys" :key="key">
+            <div class="grid grid-cols-3 gap-3 py-1.5 border-b border-border/50 items-start">
+              <div class="text-xs"><div class="font-medium" x-text="key"></div><div class="text-muted-foreground" x-text="schema[key]?.type"></div></div>
+              <div class="col-span-2 text-sm">
+                <template x-if="schema[key]?.type==='string'"><div>
+                  <input x-show="editing" x-model="editResult[key]" class="bg-background border rounded-md px-2 py-1 w-full text-sm">
+                  <span x-show="!editing" :class="isEmpty(exView.result?.[key])?'text-muted-foreground italic':''" x-text="display(exView.result?.[key])"></span>
+                </div></template>
+                <template x-if="schema[key]?.type==='list'"><div>
+                  <textarea x-show="editing" x-model="editResultText[key]" rows="3" class="bg-background border rounded-md px-2 py-1 w-full text-xs font-mono"></textarea>
+                  <ul x-show="!editing" class="list-disc ml-4"><template x-for="(item,i) in (exView.result?.[key]||[])" :key="i"><li x-text="item"></li></template><span x-show="!(exView.result?.[key]||[]).length" class="text-muted-foreground italic">empty</span></ul>
+                </div></template>
+                <template x-if="schema[key]?.type==='objectList'"><div>
+                  <textarea x-show="editing" x-model="editResultText[key]" rows="4" class="bg-background border rounded-md px-2 py-1 w-full text-xs font-mono"></textarea>
+                  <div x-show="!editing" class="overflow-auto">
+                    <table class="text-xs border-collapse" x-show="(exView.result?.[key]||[]).length"><thead><tr><template x-for="f in Object.keys(schema[key].fields)" :key="f"><th class="border px-1.5 py-0.5 bg-muted/50 text-muted-foreground" x-text="f"></th></template></tr></thead>
+                    <tbody><template x-for="(row,ri) in (exView.result?.[key]||[])" :key="ri"><tr><template x-for="f in Object.keys(schema[key].fields)" :key="f"><td class="border px-1.5 py-0.5" x-text="row[f]"></td></template></tr></template></tbody></table>
+                    <span x-show="!(exView.result?.[key]||[]).length" class="text-muted-foreground italic">empty</span>
+                  </div>
+                </div></template>
+              </div>
+            </div>
+          </template>
+        </div>
+      </div></template>
+    </div>
+  </div>
+
+  <!-- ════════════ ADD FIELD MODAL ════════════ -->
+  <div x-show="addFieldOpen" x-transition.opacity class="fixed inset-0 bg-black/50 z-50 grid place-items-center" @click.self="addFieldOpen=false">
+    <div class="bg-card rounded-xl border shadow-xl p-6 w-full max-w-lg space-y-3">
+      <h3 class="font-semibold">Add field</h3>
+      <div class="grid grid-cols-2 gap-2">
+        <div><label class="text-xs text-muted-foreground">Key (snake_case)</label><input x-model="newField.key" placeholder="order_book" class="bg-background border rounded-md px-2 py-1.5 text-sm w-full"></div>
+        <div><label class="text-xs text-muted-foreground">Type</label><select x-model="newField.type" class="bg-background border rounded-md px-2 py-1.5 text-sm w-full"><option value="string">string</option><option value="list">list</option><option value="objectList">objectList (table)</option></select></div>
+      </div>
+      <div x-show="newField.type==='string'"><label class="text-xs text-muted-foreground">Format (optional)</label><select x-model="newField.format" class="bg-background border rounded-md px-2 py-1.5 text-sm w-full"><option value="">none</option><template x-for="f in formats" :key="f"><option :value="f" x-text="f"></option></template></select></div>
+      <div><label class="text-xs text-muted-foreground">Description</label><input x-model="newField.description" class="bg-background border rounded-md px-2 py-1.5 text-sm w-full"></div>
+      <div x-show="newField.type==='objectList'" class="space-y-2 border-t pt-2">
+        <div class="text-xs text-muted-foreground">Columns</div>
+        <template x-for="(sf,i) in newField.subFields" :key="i">
+          <div class="flex gap-2"><input x-model="sf.key" placeholder="column_key" class="bg-background border rounded-md px-2 py-1 text-xs w-32"><input x-model="sf.description" placeholder="description" class="bg-background border rounded-md px-2 py-1 text-xs flex-1"><button @click="newField.subFields.splice(i,1)" class="text-rose-500 px-1">✕</button></div>
+        </template>
+        <button @click="newField.subFields.push({key:'',description:''})" class="text-xs text-muted-foreground hover:text-foreground">+ column</button>
+      </div>
+      <div class="flex gap-2 justify-end"><button @click="addFieldOpen=false" class="px-3 py-1.5 rounded-md border bg-card text-sm">Cancel</button><button @click="commitNewField()" class="px-4 py-1.5 rounded-md bg-primary text-primary-foreground text-sm">Add</button></div>
+    </div>
+  </div>
+
+  <!-- ════════════ ADD SECTION MODAL ════════════ -->
+  <div x-show="addSectionOpen" x-transition.opacity class="fixed inset-0 bg-black/50 z-50 grid place-items-center" @click.self="addSectionOpen=false">
+    <div class="bg-card rounded-xl border shadow-xl p-6 w-full max-w-lg space-y-3">
+      <h3 class="font-semibold">Add section</h3>
+      <div><label class="text-xs text-muted-foreground">Section key (UPPER_SNAKE_CASE)</label><input x-model="newSection.key" placeholder="DIVIDEND_POLICY" class="bg-background border rounded-md px-2 py-1.5 text-sm w-full"></div>
+      <div><label class="text-xs text-muted-foreground">Aliases (comma-separated ToC headings)</label><input x-model="newSection.aliases" placeholder="dividend policy, dividends" class="bg-background border rounded-md px-2 py-1.5 text-sm w-full"></div>
+      <label class="text-sm flex items-center gap-1.5"><input type="checkbox" x-model="newSection.target" class="accent-primary"> extract this section by default</label>
+      <div class="flex gap-2 justify-end"><button @click="addSectionOpen=false" class="px-3 py-1.5 rounded-md border bg-card text-sm">Cancel</button><button @click="commitNewSection()" class="px-4 py-1.5 rounded-md bg-primary text-primary-foreground text-sm">Add</button></div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+function app() {
+  return {
+    dark: false,
+    page: 'overview',
+    // auth
+    token: '', authEnabled: false, needsLogin: false, authUser: 'admin',
+    loginForm: { username: '', password: '' }, loginError: '', loggingIn: false,
+    nav: [
+      { section: 'Monitor', items: [
+        { id:'overview', label:'Overview', icon:'M3 3v18h18M7 14l3-3 3 3 4-5' },
+        { id:'ipos', label:'IPOs', icon:'M3 7h18M3 12h18M3 17h18' },
+        { id:'review', label:'Extractions', icon:'M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z M14 2v6h6' },
+        { id:'jobs', label:'Jobs', icon:'M12 2v4M12 18v4M4.9 4.9l2.8 2.8M16.3 16.3l2.8 2.8M2 12h4M18 12h4' },
+      ]},
+      { section: 'Configure', items: [
+        { id:'schema', label:'Schema', icon:'M4 7V4h16v3M9 20h6M12 4v16' },
+        { id:'sections', label:'Sections', icon:'M3 3h7v7H3zM14 3h7v7h-7zM14 14h7v7h-7zM3 14h7v7H3z' },
+        { id:'lab', label:'PDF Lab', icon:'M9 2v6l-5 9a2 2 0 0 0 2 3h12a2 2 0 0 0 2-3l-5-9V2' },
+        { id:'control', label:'Control', icon:'M12 2a10 10 0 1 0 10 10M12 6v6l4 2' },
+      ]},
+    ],
+    formats: ['date','period','percent','currency','category'],
+    allSources: ['upstox','nse','groww','zerodha'],
+    toast: { msg:'', err:false },
+    loading: 0,
+    health: { ok:false, ipos:null },
+    stats: { byStatus:{}, bySector:[], gmpLeaders:[], docCoverage:{}, extractions:{byStatus:{},byPipeline:{}}, jobs:[] },
+    kpi: { ipos:0, openUpcoming:0, extractions:0, review:0 },
+    charts: {},
+
+    ipos: [], pagination:{page:1,total:0,hasMore:false}, ipoFilters:{search:'',status:'',document:'',sort:'latest'}, ipoDetail:null,
+    extractForm: null,
+    schema:{}, schemaKeys:[], defaultValue:'[-]',
+    extractions:[], exFilter:'review', exView:null, editing:false, editResult:{}, editResultText:{},
+    jobs:[], jobFilters:{type:'',status:''}, jobAutoRefresh:false, activeJob:null,
+    scrapeForm:{sources:['upstox','nse','groww','zerodha'],dryRun:false},
+    bulkForm:{pipeline:'cascade',docType:'auto',status:'',force:false},
+
+    // schema editor
+    schemaDraft:{}, schemaJsonMode:false, schemaJsonText:'', addFieldOpen:false, schemaSearch:'',
+    newField:{key:'',type:'string',format:'',description:'',subFields:[{key:'',description:''}]},
+    // sections editor
+    sectionDraft:{aliases:{},targets:[]}, addSectionOpen:false, newSection:{key:'',aliases:'',target:true}, sectionSearch:'',
+    // pdf lab
+    lab:{search:'',results:[],slug:'',companyName:'',docType:'auto',start:0,end:5,prompt:'',job:null,kind:'',_poll:null},
+
+    get runningJobs(){ return this.jobs.filter(j=>j.status==='running').length; },
+
+    async init() {
+      this.dark = localStorage.getItem('theme') === 'dark';
+      document.documentElement.classList.toggle('dark', this.dark);
+      this.token = localStorage.getItem('authToken') || '';
+      // Does this deployment require login?
+      const st = await fetch('/auth/status').then(r => r.json()).catch(() => ({ authEnabled: false }));
+      this.authEnabled = st.authEnabled;
+      this.authUser = st.user || 'admin';
+      this.loginForm.username = this.authUser;
+      if (this.authEnabled) {
+        if (!this.token) { this.needsLogin = true; return; }
+        // validate stored token against a protected endpoint
+        const ok = await fetch('/auth/me', { headers: this.authHeaders() }).then(r => r.ok).catch(() => false);
+        if (!ok) { this.token = ''; localStorage.removeItem('authToken'); this.needsLogin = true; return; }
+      }
+      await this.boot();
+    },
+
+    // Everything that needs a valid session runs here (after login if required).
+    async boot() {
+      await this.loadSchema();
+      await this.refreshAll();
+      if (!this._tick) this._tick = setInterval(() => { if (this.jobAutoRefresh) this.tickJobs(); }, 4000);
+      this.$watch('schemaJsonMode', v => { if (v) this.schemaJsonText = JSON.stringify(this.schemaDraft, null, 2); else { try { this.schemaDraft = JSON.parse(this.schemaJsonText); } catch (e) { this.notify('Invalid JSON: ' + e.message, true); } } });
+    },
+
+    authHeaders() { return this.token ? { Authorization: 'Bearer ' + this.token } : {}; },
+    async login() {
+      this.loginError = ''; this.loggingIn = true;
+      try {
+        const r = await fetch('/auth/login', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ username: this.loginForm.username, password: this.loginForm.password }) });
+        const b = await r.json();
+        if (!r.ok) throw new Error(b.error || 'Login failed');
+        this.token = b.token || ''; localStorage.setItem('authToken', this.token);
+        this.needsLogin = false; this.loginForm.password = '';
+        await this.boot();
+      } catch (e) { this.loginError = e.message; } finally { this.loggingIn = false; }
+    },
+    logout() { this.token = ''; localStorage.removeItem('authToken'); this.needsLogin = true; },
+
+    pageTitle(){ for(const g of this.nav) for(const i of g.items) if(i.id===this.page) return i.label; return ''; },
+    go(id){ this.page=id;
+      if(id==='overview'){ this.loadStats(); }
+      if(id==='schema'){ this.schemaDraft=JSON.parse(JSON.stringify(this.schema)); }
+      if(id==='sections'){ this.loadSections(); }
+    },
+    toggleTheme(){ this.dark=!this.dark; document.documentElement.classList.toggle('dark',this.dark); localStorage.setItem('theme',this.dark?'dark':'light'); if(this.page==='overview') this.renderCharts(); },
+
+    async refreshAll(){ await Promise.all([this.loadHealth(),this.loadStats(),this.loadIpos(1),this.loadExtractions(),this.loadJobs()]); },
+
+    async api(path,opts={}){ this.loading++; try{ opts.headers={...(opts.headers||{}),...this.authHeaders()}; const r=await fetch(path,opts); if(r.status===401){ this.token=''; localStorage.removeItem('authToken'); this.needsLogin=true; throw new Error('Session expired — please sign in'); } const ct=r.headers.get('content-type')||''; const b=ct.includes('json')?await r.json():await r.text(); if(!r.ok) throw new Error((b&&b.error)||r.statusText); return b; } finally { this.loading--; } },
+    notify(msg,err=false){ this.toast={msg,err}; setTimeout(()=>this.toast={msg:'',err:false},3800); },
+
+    async loadHealth(){ try{ this.health={ok:true,...(await this.api('/health'))}; this.kpi.ipos=this.health.ipos; }catch{ this.health={ok:false,ipos:null}; } },
+    async loadSchema(){ const s=await this.api('/schema'); this.schema=s.fields; this.schemaKeys=Object.keys(s.fields); this.defaultValue=s.defaultValue; },
+
+    async loadStats(){
+      try{ this.stats=await this.api('/stats'); }catch(e){ return; }
+      const bs=this.stats.byStatus||{};
+      this.kpi.openUpcoming=(bs.open||0)+(bs.upcoming||0);
+      this.kpi.extractions=Object.values(this.stats.extractions?.byStatus||{}).reduce((a,b)=>a+b,0);
+      this.kpi.review=this.stats.extractions?.byStatus?.review||0;
+      this.renderCharts();
+    },
+    kpiCards(){ return [
+      {label:'Total IPOs',value:this.kpi.ipos??'—',sub:`${this.kpi.openUpcoming} open / upcoming`,icon:'M3 3v18h18',go:'ipos'},
+      {label:'Open / Upcoming',value:this.kpi.openUpcoming,sub:'live bidding window',icon:'M12 2v20M2 12h20',go:'ipos'},
+      {label:'Extractions',value:this.kpi.extractions,sub:'documents processed',icon:'M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z',go:'review'},
+      {label:'Needs review',value:this.kpi.review,sub:'awaiting a human',accent:'text-amber-500',icon:'M12 9v4M12 17h.01M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z',go:'review'},
+    ]; },
+
+    chartColors(){ const muted=getComputedStyle(document.documentElement).getPropertyValue('--muted-foreground'); return { grid:(this.dark?'rgba(255,255,255,.08)':'rgba(0,0,0,.07)'), text:'hsl('+(muted.trim()||'240 5% 50%')+')' }; },
+    palette:['#6366f1','#22c55e','#f59e0b','#ef4444','#06b6d4','#a855f7','#ec4899','#14b8a6'],
+
+    // Highcharts: a div container that always has a set height → no collapse.
+    mkChart(id,opt){
+      const el=document.getElementById(id);
+      if(!el || typeof Highcharts==='undefined') return;
+      const c=this.chartColors();
+      const base={
+        chart:{ backgroundColor:'transparent', style:{ fontFamily:'Inter' }, spacing:[8,4,8,4] },
+        title:{ text:null }, credits:{ enabled:false },
+        colors:this.palette,
+        tooltip:{ backgroundColor: this.dark?'#1c1c20':'#fff', style:{ color:c.text }, borderWidth:0, shadow:true },
+      };
+      try{
+        if(this.charts[id]){ this.charts[id].destroy(); delete this.charts[id]; }
+        this.charts[id]=Highcharts.chart(id, Highcharts.merge(base, opt));
+      }catch(e){ console.warn('[chart]',id,e.message); }
+    },
+    renderCharts(){
+      if(typeof Highcharts==='undefined') return;
+      clearTimeout(this._chartT);
+      this._chartT=setTimeout(()=>this._drawCharts(),50);  // debounce bursts
+    },
+    _drawCharts(){
+      if(this.page!=='overview') return;
+      const probe=document.getElementById('chStatus');
+      if(!probe || probe.clientHeight===0){ clearTimeout(this._chartT); this._chartT=setTimeout(()=>this._drawCharts(),150); return; } // wait for layout
+      const c=this.chartColors();
+      const axis=(horizontal)=>({ lineColor:c.grid, tickColor:c.grid, gridLineColor:c.grid, labels:{ style:{ color:c.text, fontSize:'11px' } }, title:{ text:null } });
+
+      const bs=this.stats.byStatus||{};
+      this.mkChart('chStatus',{
+        chart:{ type:'pie' },
+        legend:{ enabled:true, layout:'vertical', align:'right', verticalAlign:'middle', itemStyle:{ color:c.text, fontWeight:'500' }, itemHoverStyle:{ color:c.text } },
+        plotOptions:{ pie:{ innerSize:'62%', borderWidth:0, dataLabels:{ enabled:false }, showInLegend:true } },
+        series:[{ name:'IPOs', data:Object.entries(bs).map(([k,v])=>({ name:k, y:v })) }],
+      });
+
+      const sec=this.stats.bySector||[];
+      this.mkChart('chSector',{
+        chart:{ type:'column' }, legend:{ enabled:false },
+        xAxis:{ ...axis(), categories:sec.map(s=>s.sector) },
+        yAxis:{ ...axis(), allowDecimals:false },
+        plotOptions:{ column:{ borderRadius:4, color:'#6366f1', borderWidth:0 } },
+        series:[{ name:'IPOs', data:sec.map(s=>s.count) }],
+      });
+
+      const dc=this.stats.docCoverage||{};
+      this.mkChart('chDocs',{
+        chart:{ type:'bar' }, legend:{ enabled:false },
+        xAxis:{ ...axis(), categories:['DRHP','RHP','Final'] },
+        yAxis:{ ...axis(), allowDecimals:false },
+        plotOptions:{ bar:{ borderRadius:4, borderWidth:0, colorByPoint:true } },
+        colors:['#06b6d4','#a855f7','#22c55e'],
+        series:[{ name:'IPOs', data:[dc.drhp||0, dc.rhp||0, dc.final||0] }],
+      });
+
+      const pl=this.stats.extractions?.byPipeline||{};
+      this.mkChart('chPipeline',{
+        chart:{ type:'pie' },
+        legend:{ enabled:true, layout:'vertical', align:'right', verticalAlign:'middle', itemStyle:{ color:c.text, fontWeight:'500' }, itemHoverStyle:{ color:c.text } },
+        plotOptions:{ pie:{ innerSize:'62%', borderWidth:0, dataLabels:{ enabled:false }, showInLegend:true } },
+        series:[{ name:'Runs', data:Object.entries(pl).map(([k,v])=>({ name:k, y:v })) }],
+      });
+
+      const byDay={}; (this.stats.jobs||[]).forEach(j=>{ const d=(j.createdAt||'').slice(0,10); if(d) byDay[d]=(byDay[d]||0)+1; });
+      const days=Object.keys(byDay).sort().slice(-14);
+      this.mkChart('chJobs',{
+        chart:{ type:'area' }, legend:{ enabled:false },
+        xAxis:{ ...axis(), categories:days.map(d=>d.slice(5)) },
+        yAxis:{ ...axis(), allowDecimals:false },
+        plotOptions:{ area:{ color:'#6366f1', fillOpacity:0.15, lineWidth:2, marker:{ enabled:false, radius:2 } } },
+        series:[{ name:'Jobs', data:days.map(d=>byDay[d]) }],
+      });
+    },
+
+    // ── IPOs ──
+    async loadIpos(page=1){ const f=this.ipoFilters; const qs=new URLSearchParams({page,limit:50}); if(f.search)qs.set('search',f.search); if(f.status)qs.set('status',f.status); if(f.document)qs.set('document',f.document); if(f.sort)qs.set('sort',f.sort); try{ const r=await this.api('/ipos?'+qs); this.ipos=r.data; this.pagination=r.pagination; }catch(e){ this.notify(e.message,true); } },
+    async openIpo(slug){ try{ this.ipoDetail=await this.api('/ipos/'+slug); }catch(e){ this.notify(e.message,true); } },
+    detailRows(d){ return [['Status',d.status],['Issue type',d.issueType],['Price band',this.cell(d.priceBand)],['Lot size',this.cell(d.lotSize)],['Issue size',this.cell(d.issueSize)],['Bidding start',this.fmtDate(d.biddingStart)],['Bidding end',this.fmtDate(d.biddingEnd)],['Listing date',this.fmtDate(d.listingDate)],['ISIN',d.isin],['Symbol',d.symbol],['Sources',(d.sources||[]).join(', ')]]; },
+    async deleteIpo(slug){ if(!confirm('Delete '+slug+'?')) return; try{ await this.api('/ipos/'+slug,{method:'DELETE'}); this.notify('Deleted '+slug); this.ipoDetail=null; this.loadIpos(this.pagination.page); }catch(e){ this.notify(e.message,true); } },
+    openInLab(ipo){ this.ipoDetail=null; this.page='lab'; this.labPick({slug:ipo.slug,companyName:ipo.companyName,documents:ipo.documents}); },
+
+    // ── extract form ──
+    openExtractForm(ipo){ this.extractForm={slug:ipo.slug,name:ipo.companyName||ipo.slug,pipeline:'cascade',docType:'auto',force:false}; },
+    async doExtract(){ const f=this.extractForm; try{ const r=await this.api('/ipos/'+f.slug+'/extract',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({pipeline:f.pipeline,docType:f.docType,force:f.force})}); this.notify('Extraction started'); this.extractForm=null; this.page='jobs'; this.loadJobs(); this.openJob(r.jobId); }catch(e){ this.notify(e.message,true); } },
+
+    // ── extractions ──
+    async loadExtractions(){ try{ const qs=this.exFilter?('?status='+this.exFilter):''; const r=await this.api('/extractions'+qs); this.extractions=r.extractions; }catch(e){ this.extractions=[]; } },
+    viewExtractions(slug){ this.ipoDetail=null; this.page='review'; this.exFilter=''; this.loadExtractions().then(()=>{ const e=this.extractions.find(x=>x.ipoSlug===slug); if(e) this.openExtraction(e); }); },
+    async openExtraction(e){ try{ const r=await this.api('/extractions/'+e.ipoSlug); const full=r.extractions.find(x=>x.docType===e.docType&&x.pipeline===e.pipeline)||r.extractions[0]; this.exView=full; this.editing=false; this.seedEdit(full.result||{}); }catch(err){ this.notify(err.message,true); } },
+    seedEdit(result){ this.editResult={}; this.editResultText={}; for(const k of this.schemaKeys){ const t=this.schema[k].type,v=result[k]; if(t==='string') this.editResult[k]=(v==null?'':String(v)); else if(t==='list') this.editResultText[k]=(Array.isArray(v)?v:[]).join('\n'); else if(t==='objectList') this.editResultText[k]=JSON.stringify(Array.isArray(v)?v:[],null,2); } },
+    buildEditedResult(){ const out={}; for(const k of this.schemaKeys){ const t=this.schema[k].type; if(t==='string') out[k]=this.editResult[k]||this.defaultValue; else if(t==='list') out[k]=(this.editResultText[k]||'').split('\n').map(s=>s.trim()).filter(Boolean); else if(t==='objectList'){ try{ out[k]=JSON.parse(this.editResultText[k]||'[]'); }catch{ out[k]=this.exView.result?.[k]||[]; } } } return out; },
+    async saveExtraction(){ const result=this.buildEditedResult(); try{ await this.api('/extractions/'+this.exView.ipoSlug,{method:'PATCH',headers:{'content-type':'application/json'},body:JSON.stringify({docType:this.exView.docType,pipeline:this.exView.pipeline,result})}); this.exView.result=result; this.editing=false; this.notify('Saved corrections'); }catch(e){ this.notify(e.message,true); } },
+    async resolveReview(){ try{ const body={docType:this.exView.docType,pipeline:this.exView.pipeline,status:'reviewed'}; if(this.editing) body.result=this.buildEditedResult(); await this.api('/extractions/'+this.exView.ipoSlug,{method:'PATCH',headers:{'content-type':'application/json'},body:JSON.stringify(body)}); this.exView.status='reviewed'; if(body.result)this.exView.result=body.result; this.notify('Marked reviewed'); this.loadExtractions(); this.loadStats(); }catch(e){ this.notify(e.message,true); } },
+
+    // ── jobs ──
+    async loadJobs(){ const qs=new URLSearchParams(); if(this.jobFilters.type)qs.set('type',this.jobFilters.type); if(this.jobFilters.status)qs.set('status',this.jobFilters.status); try{ this.jobs=(await this.api('/jobs?'+qs)).jobs; }catch(e){} },
+    async openJob(id){ try{ this.activeJob=await this.api('/jobs/'+id); }catch(e){ this.notify(e.message,true); } },
+    async tickJobs(){ await this.loadJobs(); if(this.activeJob&&this.activeJob.status==='running') await this.openJob(this.activeJob.jobId); },
+
+    // ── control ──
+    async post(path,body,label){ try{ const r=await this.api(path,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)}); this.notify(label+' started'); this.page='jobs'; this.loadJobs(); if(r.jobId) this.openJob(r.jobId); }catch(e){ this.notify(e.message,true); } },
+    doScrape(){ this.post('/ipos/scrape',{sources:this.scrapeForm.sources,dryRun:this.scrapeForm.dryRun},'Scrape'); },
+    doBulkExtract(){ const b=this.bulkForm; this.post('/ipos/extract',{pipeline:b.pipeline,docType:b.docType,status:b.status||undefined,force:b.force},'Bulk extract'); },
+
+    // ── SCHEMA EDITOR ──
+    addSubField(key){ if(!this.schemaDraft[key].fields) this.schemaDraft[key].fields={}; const n='field_'+(Object.keys(this.schemaDraft[key].fields).length+1); this.schemaDraft[key].fields[n]={type:'string',description:''}; },
+    delSubField(key,sk){ delete this.schemaDraft[key].fields[sk]; },
+    delField(key){ if(confirm('Remove field "'+key+'"?')) delete this.schemaDraft[key]; },
+    commitNewField(){ const nf=this.newField; if(!nf.key){ this.notify('key required',true); return; } const def={type:nf.type,description:nf.description}; if(nf.type==='string'&&nf.format) def.format=nf.format; if(nf.type==='objectList'){ def.fields={}; for(const sf of nf.subFields){ if(sf.key) def.fields[sf.key]={type:'string',description:sf.description||''}; } if(!Object.keys(def.fields).length){ this.notify('objectList needs ≥1 column',true); return; } } this.schemaDraft[nf.key]=def; this.addFieldOpen=false; this.newField={key:'',type:'string',format:'',description:'',subFields:[{key:'',description:''}]}; this.notify('Field added to draft — click Save schema'); },
+    async saveSchema(){ try{ const fields=this.schemaJsonMode?JSON.parse(this.schemaJsonText):this.schemaDraft; const r=await this.api('/schema',{method:'PUT',headers:{'content-type':'application/json'},body:JSON.stringify({fields})}); this.schema=r.fields; this.schemaKeys=Object.keys(r.fields); this.schemaDraft=JSON.parse(JSON.stringify(r.fields)); this.notify('Schema saved ('+this.schemaKeys.length+' fields)'); }catch(e){ this.notify(e.message,true); } },
+    async resetSchema(){ if(!confirm('Reset schema to built-in default?')) return; try{ const r=await this.api('/schema/reset',{method:'POST'}); this.schema=r.fields; this.schemaKeys=Object.keys(r.fields); this.schemaDraft=JSON.parse(JSON.stringify(r.fields)); this.notify('Schema reset'); }catch(e){ this.notify(e.message,true); } },
+
+    // ── SECTIONS EDITOR ──
+    async loadSections(){ try{ const r=await this.api('/config/sections'); this.sectionDraft={aliases:JSON.parse(JSON.stringify(r.aliases)),targets:[...r.targets]}; }catch(e){ this.notify(e.message,true); } },
+    toggleTarget(key){ const i=this.sectionDraft.targets.indexOf(key); if(i>=0) this.sectionDraft.targets.splice(i,1); else this.sectionDraft.targets.push(key); },
+    delSection(key){ if(!confirm('Remove section "'+key+'"?')) return; delete this.sectionDraft.aliases[key]; const i=this.sectionDraft.targets.indexOf(key); if(i>=0) this.sectionDraft.targets.splice(i,1); },
+    commitNewSection(){ const ns=this.newSection; if(!ns.key){ this.notify('key required',true); return; } this.sectionDraft.aliases[ns.key]=ns.aliases.split(',').map(s=>s.trim().toLowerCase()).filter(Boolean); if(ns.target&&!this.sectionDraft.targets.includes(ns.key)) this.sectionDraft.targets.push(ns.key); this.addSectionOpen=false; this.newSection={key:'',aliases:'',target:true}; this.notify('Section added — click Save sections'); },
+    async saveSections(){ try{ await this.api('/config/sections',{method:'PUT',headers:{'content-type':'application/json'},body:JSON.stringify(this.sectionDraft)}); this.notify('Sections saved'); }catch(e){ this.notify(e.message,true); } },
+    async resetSections(){ if(!confirm('Reset sections to default?')) return; try{ const r=await this.api('/config/sections/reset',{method:'POST'}); this.sectionDraft={aliases:JSON.parse(JSON.stringify(r.aliases)),targets:[...r.targets]}; this.notify('Sections reset'); }catch(e){ this.notify(e.message,true); } },
+
+    // ── PDF LAB ──
+    async labSearch(){ if(!this.lab.search){ this.lab.results=[]; return; } if(this.lab.slug && this.lab.search===this.lab.companyName) return; try{ const r=await this.api('/ipos?limit=8&document=&search='+encodeURIComponent(this.lab.search)); this.lab.results=r.data.filter(d=>Object.keys(d.documents||{}).length); }catch(e){} },
+    labPick(r){ this.lab.slug=r.slug; this.lab.companyName=r.companyName||r.slug; this.lab.search=this.lab.companyName; this.lab.results=[]; this.lab.job=null; this.lab.kind=''; },
+    labClear(){ this.lab.slug=''; this.lab.search=''; this.lab.companyName=''; this.lab.job=null; },
+    labPdfUrl(){ return '/pdf/'+this.lab.slug+'?docType='+this.lab.docType+(this.token?('&token='+encodeURIComponent(this.token)):''); },
+    async runTool(path,extra,kind){ if(!this.lab.slug){ this.notify('pick an IPO first',true); return; } this.lab.kind=kind; try{ const r=await this.api(path,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({slug:this.lab.slug,docType:this.lab.docType,...extra})}); this.lab.job={jobId:r.jobId,status:'running',logs:[]}; this.pollLab(r.jobId); }catch(e){ this.notify(e.message,true); } },
+    pollLab(id){ clearTimeout(this.lab._poll); const step=async()=>{ try{ const j=await this.api('/jobs/'+id); this.lab.job=j; if(j.status==='running'){ this.lab._poll=setTimeout(step,2000); } else if(j.status==='failed'){ this.notify('Tool failed: '+j.error,true); } }catch(e){} }; step(); },
+    async applyProposed(key,def){ try{ const r=await this.api('/schema/field',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({key,definition:def})}); this.schema=r.fields; this.schemaKeys=Object.keys(r.fields); this.schemaDraft=JSON.parse(JSON.stringify(r.fields)); this.notify('Added "'+key+'" to schema'); }catch(e){ this.notify(e.message,true); } },
+
+    // ── schema/section editor helpers ──
+    prettyKey(k){ return String(k).replace(/_/g,' ').replace(/\b\w/g,c=>c.toUpperCase()); },
+    typeLabel(t){ return {string:'Text',list:'List',objectList:'Table'}[t]||t; },
+    typePill(t){ return {string:'border-zinc-400/40 text-muted-foreground',list:'border-violet-500/40 text-violet-500',objectList:'border-cyan-500/40 text-cyan-500'}[t]||'border-border'; },
+    filteredSchemaKeys(){ const q=this.schemaSearch.trim().toLowerCase(); const keys=Object.keys(this.schemaDraft); if(!q) return keys; return keys.filter(k=>k.toLowerCase().includes(q)||(this.schemaDraft[k].description||'').toLowerCase().includes(q)); },
+    filteredSectionKeys(){ const q=this.sectionSearch.trim().toLowerCase(); const keys=Object.keys(this.sectionDraft.aliases); if(!q) return keys; return keys.filter(k=>k.toLowerCase().includes(q)||(this.sectionDraft.aliases[k]||[]).join(' ').toLowerCase().includes(q)); },
+
+    // ── format helpers ──
+    fmtDate(d){ if(!d) return '—'; try{ return new Date(d).toLocaleString('en-IN',{dateStyle:'medium',timeStyle:'short'}); }catch{ return d; } },
+    cell(v){ if(v==null||v==='') return ''; if(typeof v==='object'){ if('min'in v&&'max'in v) return v.min===v.max?`${v.min}`:`${v.min}–${v.max}`; if('amount'in v) return v.amount; return JSON.stringify(v); } return v; },
+    isEmpty(v){ return v==null||v===''||v===this.defaultValue||v==='[●]'; },
+    display(v){ return this.isEmpty(v)?'—':v; },
+    statusClass(s){ return {upcoming:'border-blue-500/30 text-blue-500',open:'border-emerald-500/30 text-emerald-500',closed:'border-amber-500/30 text-amber-500',listed:'border-zinc-400/30 text-muted-foreground'}[s]||'border-border text-muted-foreground'; },
+    exStatusClass(s){ return {completed:'border-emerald-500/30 text-emerald-500',review:'border-amber-500/30 text-amber-500',reviewed:'border-blue-500/30 text-blue-500'}[s]||'border-border text-muted-foreground'; },
+    jobStatusClass(s){ return {running:'border-blue-500/30 text-blue-500',completed:'border-emerald-500/30 text-emerald-500',failed:'border-rose-500/30 text-rose-500'}[s]||'border-border text-muted-foreground'; },
+    logClass(msg){ const m=(msg||'').toLowerCase(); if(/error|fail|exception|✕|❌|timed out/.test(m)) return 'text-rose-400'; if(/warn|retry|skip|fallback|⚠/.test(m)) return 'text-amber-400'; if(/done|success|complete|saved|found|✓|✅/.test(m)) return 'text-emerald-400'; return 'text-zinc-300'; },
+  };
+}
+</script>
+</body>
+</html>

@@ -11,22 +11,14 @@
  */
 
 const { logger } = require('../../utils/logger');
+// Placeholder detection and field groupings come from the single source of
+// truth (schema.js) so adding/removing a field there updates merge too.
+const {
+  isPlaceholder, getStringFields, getListFields, getObjectListFields,
+  getObjectListMerge, canonicalCategory, canonicalPeriod,
+} = require('../llm/schema');
 
 const log = logger.child({ module: 'extraction:merge' });
-
-// ── Placeholder detection ────────────────────────────────────────────────────
-
-const PLACEHOLDERS = new Set([
-  'null', 'none', 'n/a', 'na', 'not mentioned', 'not available',
-  'not applicable', 'not disclosed', 'tba', 'tbd', 'to be announced',
-  '[●]', '-', '--', '—', '',
-]);
-
-function isPlaceholder(val) {
-  if (val == null) return true;
-  const cleaned = String(val).trim().toLowerCase();
-  return !cleaned || PLACEHOLDERS.has(cleaned) || cleaned.includes('[●]');
-}
 
 // ── String similarity ────────────────────────────────────────────────────────
 
@@ -48,44 +40,9 @@ function stringSimilarity(a, b) {
   return intersection / Math.max(wordsA.size, wordsB.size);
 }
 
-// ── Investor category synonyms ───────────────────────────────────────────────
-
-const CATEGORY_SYNONYMS = [
-  new Set(['qib', 'qualified institutional buyers', 'qualified institutional bidders', 'qib portion']),
-  new Set(['nib', 'nii', 'non-institutional investor', 'non institutional bidders', 'non-institutional investors', 'nii portion']),
-  new Set(['retail', 'retail individual investors', 'retail individual bidders', 'retail portion', 'retail investors']),
-  new Set(['market maker', 'market maker portion']),
-  new Set(['employee', 'employee reservation', 'employees']),
-  new Set(['anchor', 'anchor investor', 'anchor investors']),
-];
-
-function normalizeCategory(cat) {
-  const lower = normalizeStr(cat);
-  for (const group of CATEGORY_SYNONYMS) {
-    for (const syn of group) {
-      if (lower.includes(syn) || syn.includes(lower)) {
-        return [...group][0]; // canonical name (first in set)
-      }
-    }
-  }
-  return lower;
-}
-
 // ── Core merge logic ─────────────────────────────────────────────────────────
-
-// String fields — take the longer / non-placeholder value
-const STRING_FIELDS = [
-  'company_name', 'company_description', 'incorporation_date', 'registered_office',
-  'website', 'issue_type', 'face_value', 'price_band', 'lot_size', 'issue_size',
-  'fresh_issue', 'offer_for_sale', 'registrar', 'sector', 'pe_ratio', 'roce',
-  'roe', 'debt_to_equity', 'promoter_holding_pre', 'promoter_holding_post',
-];
-
-// List fields — append non-duplicates
-const LIST_FIELDS = [
-  'listing_at', 'promoters', 'lead_managers', 'objects_of_the_offer',
-  'risk_factors', 'competitive_strengths', 'business_strategies',
-];
+// STRING_FIELDS (take the longer / non-placeholder value) and LIST_FIELDS
+// (append non-duplicates) are derived from the field registry in schema.js.
 
 /**
  * Fuzzy-deduplicate a string array (similarity ≥ 0.8 → duplicate).
@@ -99,59 +56,68 @@ function fuzzyDedupeStrings(items) {
   return result;
 }
 
+// ── Generic object-list merging ───────────────────────────────────────────────
+// How to merge each objectList field is now declared on the field itself in
+// schema.js (mergeKey / mergeMatch) and surfaced via getObjectListMerge():
+//   'similar'  → group by fuzzy-matching the key value (e.g. period names)
+//   'category' → group by normalized investor-category synonyms
+// A field with no rule just gets exact-duplicate rows removed.
+
 /**
- * Merge financial periods by fuzzy-matching period names.
+ * Merge rows of an objectList by grouping on a key field. Rows whose key
+ * matches an existing group are folded in, filling only placeholder slots.
+ *
+ * @param {object[]} rows
+ * @param {string} keyField        Sub-field to group on (e.g. 'period')
+ * @param {'similar'|'category'} matchMode  How to compare key values
  */
-function mergeFinancials(allFinancials) {
-  const byPeriod = {};
+function mergeObjectListByKey(rows, keyField, matchMode) {
+  const groups = []; // { keyNorm, obj }
 
-  for (const entry of allFinancials) {
-    if (!entry?.period) continue;
-    const normPeriod = normalizeStr(entry.period);
+  for (const entry of rows) {
+    if (!entry || typeof entry !== 'object' || isPlaceholder(entry[keyField])) continue;
 
-    // Find existing period with similar name
-    let matched = null;
-    for (const key of Object.keys(byPeriod)) {
-      if (stringSimilarity(key, normPeriod) >= 0.7) {
-        matched = key;
-        break;
-      }
-    }
+    // Canonicalize the key the same way normalize() will, so equivalent values
+    // (e.g. "31-05-2025" and "31 May 2025", or "QIB" and "Qualified
+    // Institutional Buyers") collapse into a single row.
+    const keyNorm = matchMode === 'category'
+      ? canonicalCategory(entry[keyField])
+      : canonicalPeriod(entry[keyField]);
+
+    const matched = groups.find((g) =>
+      matchMode === 'category'
+        ? g.keyNorm === keyNorm
+        : g.keyNorm === keyNorm || stringSimilarity(g.keyNorm, keyNorm) >= 0.7,
+    );
 
     if (matched) {
-      // Merge: prefer non-placeholder values
       for (const [k, v] of Object.entries(entry)) {
-        if (!isPlaceholder(v) && isPlaceholder(byPeriod[matched][k])) {
-          byPeriod[matched][k] = v;
+        if (!isPlaceholder(v) && isPlaceholder(matched.obj[k])) {
+          matched.obj[k] = v;
         }
       }
     } else {
-      byPeriod[normPeriod] = { ...entry };
+      groups.push({ keyNorm, obj: { ...entry } });
     }
   }
 
-  return Object.values(byPeriod);
+  return groups.map((g) => g.obj);
 }
 
 /**
- * Merge reservations by normalized investor category.
+ * Remove exact-duplicate rows from an objectList (for fields with no key).
  */
-function mergeReservations(allReservations) {
-  const byCategory = {};
-
-  for (const entry of allReservations) {
-    if (!entry?.category) continue;
-    const normCat = normalizeCategory(entry.category);
-
-    if (!byCategory[normCat] || isPlaceholder(byCategory[normCat].percentage)) {
-      byCategory[normCat] = {
-        category: entry.category, // keep original casing
-        percentage: entry.percentage,
-      };
-    }
+function dedupeObjectList(rows) {
+  const seen = new Set();
+  const out = [];
+  for (const entry of rows) {
+    if (!entry || typeof entry !== 'object') continue;
+    const sig = JSON.stringify(entry);
+    if (seen.has(sig)) continue;
+    seen.add(sig);
+    out.push(entry);
   }
-
-  return Object.values(byCategory);
+  return out;
 }
 
 /**
@@ -163,10 +129,15 @@ function mergeReservations(allReservations) {
 function mergeSectionResponses(responses) {
   const combined = {};
 
-  // Initialize list fields
+  // Snapshot the current (possibly dashboard-edited) field groupings + rules.
+  const STRING_FIELDS = getStringFields();
+  const LIST_FIELDS = getListFields();
+  const OBJECT_LIST_FIELDS = getObjectListFields();
+  const OBJECT_LIST_MERGE = getObjectListMerge();
+
+  // Initialize list & object-list fields
   for (const key of LIST_FIELDS) combined[key] = [];
-  combined.financials = [];
-  combined.reservations = [];
+  for (const key of OBJECT_LIST_FIELDS) combined[key] = [];
 
   for (const resp of responses) {
     if (!resp || typeof resp !== 'object') continue;
@@ -193,19 +164,24 @@ function mergeSectionResponses(responses) {
       }
     }
 
-    // Financials and reservations: collect all
-    if (Array.isArray(resp.financials)) combined.financials.push(...resp.financials);
-    if (Array.isArray(resp.reservations)) combined.reservations.push(...resp.reservations);
+    // Object-list fields: collect all rows for merging below
+    for (const key of OBJECT_LIST_FIELDS) {
+      if (Array.isArray(resp[key])) combined[key].push(...resp[key]);
+    }
   }
 
-  // Fuzzy dedup lists
+  // Fuzzy dedup string lists
   for (const key of LIST_FIELDS) {
     combined[key] = fuzzyDedupeStrings(combined[key]);
   }
 
-  // Fuzzy merge financials and reservations
-  combined.financials = mergeFinancials(combined.financials);
-  combined.reservations = mergeReservations(combined.reservations);
+  // Merge object-lists: by key where configured, else dedupe exact duplicates
+  for (const key of OBJECT_LIST_FIELDS) {
+    const rule = OBJECT_LIST_MERGE[key];
+    combined[key] = rule
+      ? mergeObjectListByKey(combined[key], rule.key, rule.match)
+      : dedupeObjectList(combined[key]);
+  }
 
   log.debug({ fields: Object.keys(combined).filter((k) => !isPlaceholder(combined[k])).length }, 'merge complete');
 
