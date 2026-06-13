@@ -18,6 +18,7 @@ const sectionConfig = require('../extraction/config');
 const configRepo = require('../db/configRepository');
 const tools = require('../extraction/tools');
 const { createJob, appendLog, completeJob, failJob, getJob, listJobs } = require('../db/jobRepository');
+const { authEnabled, loginHandler, authGuard, DASHBOARD_USER } = require('./auth');
 const { logger, requestLogger } = require('../utils/logger');
 
 function buildApp(opts = {}) {
@@ -27,10 +28,20 @@ function buildApp(opts = {}) {
 
 
 
-  // Serve the dashboard SPA
+  // ── Public routes (no auth) ────────────────────────────────────────────────
+  // The dashboard shell + login. Everything else sits behind authGuard below.
   const publicDir = path.join(__dirname, 'public');
+  app.get('/favicon.ico', (_req, res) => res.status(204).end()); // no icon; avoid a 401 on the auto-request
   app.use('/dashboard', express.static(publicDir));
   app.get('/', (_req, res) => res.sendFile(path.join(publicDir, 'dashboard.html')));
+
+  // GET /auth/status — does this deployment require login? (client bootstraps from this)
+  app.get('/auth/status', (_req, res) => res.json({ authEnabled: authEnabled(), user: DASHBOARD_USER }));
+  // POST /auth/login — exchange credentials for a token.
+  app.post('/auth/login', loginHandler);
+
+  // ── Everything past here requires a valid token (when auth is enabled) ──────
+  app.use(authGuard);
 
   const asyncH = (fn) => (req, res) => fn(req, res).catch((e) => {
     logger.error({ err: e, method: req.method, path: req.path }, 'Request error');
@@ -104,6 +115,65 @@ function buildApp(opts = {}) {
     res.json({ fields: schemaStore.getFields(), defaultValue: schemaStore.DEFAULT_VALUE });
   });
 
+  // 400 wrapper for config edits: validation errors are the user's fault, not 500s.
+  const cfgH = (fn) => (req, res) => fn(req, res).catch((e) => {
+    logger.warn({ err: e.message, path: req.path }, 'config edit rejected');
+    res.status(400).json({ error: e.message });
+  });
+
+  // PUT /schema — replace the whole field registry. Body: { fields }.
+  app.put('/schema', cfgH(async (req, res) => {
+    const fields = req.body?.fields ?? req.body;
+    const applied = await configRepo.saveSchema(fields);
+    res.json({ fields: applied });
+  }));
+
+  // POST /schema/field — add or update one field. Body: { key, definition }.
+  app.post('/schema/field', cfgH(async (req, res) => {
+    const { key, definition } = req.body || {};
+    if (!key || !definition) throw new Error('body requires { key, definition }');
+    const fields = { ...schemaStore.getFields(), [key]: definition };
+    const applied = await configRepo.saveSchema(fields);
+    res.json({ fields: applied });
+  }));
+
+  // DELETE /schema/field/:key — remove one field.
+  app.delete('/schema/field/:key', cfgH(async (req, res) => {
+    const fields = { ...schemaStore.getFields() };
+    if (!fields[req.params.key]) return res.status(404).json({ error: `No field "${req.params.key}"` });
+    delete fields[req.params.key];
+    const applied = await configRepo.saveSchema(fields);
+    res.json({ fields: applied });
+  }));
+
+  // POST /schema/reset — restore the built-in default registry.
+  app.post('/schema/reset', cfgH(async (_req, res) => {
+    res.json({ fields: await configRepo.resetSchema() });
+  }));
+
+  // GET /config/sections — section alias dictionary + which sections are targeted.
+  app.get('/config/sections', (_req, res) => {
+    res.json({
+      aliases: sectionConfig.getSectionAliases(),
+      targets: sectionConfig.getTargetSections(),
+      defaults: {
+        aliases: sectionConfig.getDefaultSectionAliases(),
+        targets: sectionConfig.getDefaultTargetSections(),
+      },
+    });
+  });
+
+  // PUT /config/sections — update aliases and/or targets. Body: { aliases?, targets? }.
+  app.put('/config/sections', cfgH(async (req, res) => {
+    const { aliases, targets } = req.body || {};
+    res.json(await configRepo.saveSections({ aliases, targets }));
+  }));
+
+  // POST /config/sections/reset — restore default sections.
+  app.post('/config/sections/reset', cfgH(async (_req, res) => {
+    res.json(await configRepo.resetSections());
+  }));
+
   // API 1: GET /ipos — meta/index
   app.get('/ipos', asyncH(async (req, res) => {
     const { data, pagination } = await query(req.query);
@@ -155,7 +225,7 @@ function buildApp(opts = {}) {
         drhp: { $sum: { $cond: [{ $ifNull: ['$documents.drhp.url', false] }, 1, 0] } },
         rhp: { $sum: { $cond: [{ $ifNull: ['$documents.rhp.url', false] }, 1, 0] } },
         final: { $sum: { $cond: [{ $ifNull: ['$documents.final.url', false] }, 1, 0] } },
-      } } }]).toArray(), []),
+      } }]).toArray(), []),
       safe(collections.extractions().aggregate([{ $group: { _id: '$status', count: { $sum: 1 } } }]).toArray(), []),
       safe(collections.extractions().aggregate([{ $group: { _id: '$pipeline', count: { $sum: 1 } } }]).toArray(), []),
       safe(collections.jobs().find({}).sort({ createdAt: -1 }).limit(400).project({ type: 1, status: 1, createdAt: 1 }).toArray(), []),
@@ -347,7 +417,79 @@ function buildApp(opts = {}) {
     res.json(job);
   }));
 
+  // ── PDF Lab — interactive inspection tools ────────────────────────────────
 
+  // GET /pdf/:slug?docType=auto — stream the IPO's PDF (so the dashboard can
+  // embed it in an <iframe> for preview; same-origin avoids X-Frame issues).
+  app.get('/pdf/:slug', asyncH(async (req, res) => {
+    const ipo = await findBySlug(req.params.slug);
+    if (!ipo) return res.status(404).json({ error: 'IPO not found', slug: req.params.slug });
+    let docType;
+    try { docType = tools.resolveDocType(ipo, req.query.docType); }
+    catch (e) { return res.status(400).json({ error: e.message }); }
+
+    const url = ipo.documents[docType].url;
+    const upstream = await fetch(url);
+    if (!upstream.ok) return res.status(502).json({ error: `Upstream PDF ${upstream.status}` });
+
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `inline; filename="${req.params.slug}-${docType}.pdf"`);
+    const len = upstream.headers.get('content-length');
+    if (len) res.setHeader('Content-Length', len);
+    const { Readable } = require('stream');
+    Readable.fromWeb(upstream.body).pipe(res);
+  }));
+
+  // Tools run as tracked jobs (PDF download + Python can be slow) so the
+  // dashboard streams logs and reads the result from the job — no page reload.
+  // Pass { wait:true } to get the result inline instead of a jobId.
+
+  // POST /tools/toc — find ToC pages + regex section→page mapping.
+  app.post('/tools/toc', asyncH(async (req, res) => {
+    const { slug, docType = 'auto', wait = false } = req.body || {};
+    const ipo = await findBySlug(slug);
+    if (!ipo) return res.status(404).json({ error: 'IPO not found', slug });
+    await runTracked(res, { type: 'tool-toc', params: { slug, docType }, longOp: true, wait },
+      (log) => tools.inspectToc(ipo, docType, log));
+  }));
+
+  // POST /tools/locate — run the full LOCATE cascade. Body: { slug, docType?, targets? }.
+  app.post('/tools/locate', asyncH(async (req, res) => {
+    const { slug, docType = 'auto', targets, wait = false } = req.body || {};
+    const ipo = await findBySlug(slug);
+    if (!ipo) return res.status(404).json({ error: 'IPO not found', slug });
+    await runTracked(res, { type: 'tool-locate', params: { slug, docType, targets }, longOp: true, wait },
+      (log) => tools.locateSections(ipo, docType, targets, log));
+  }));
+
+  // POST /tools/text — raw text for a page range. Body: { slug, docType?, start, end }.
+  app.post('/tools/text', asyncH(async (req, res) => {
+    const { slug, docType = 'auto', start = 0, end, wait = false } = req.body || {};
+    const ipo = await findBySlug(slug);
+    if (!ipo) return res.status(404).json({ error: 'IPO not found', slug });
+    await runTracked(res, { type: 'tool-text', params: { slug, docType, start, end }, longOp: true, wait },
+      (log) => tools.getPageText(ipo, docType, start, end, log));
+  }));
+
+  // POST /tools/markdown — pymupdf4llm markdown for a page range (preview).
+  app.post('/tools/markdown', asyncH(async (req, res) => {
+    const { slug, docType = 'auto', start = 0, end, wait = false } = req.body || {};
+    const ipo = await findBySlug(slug);
+    if (!ipo) return res.status(404).json({ error: 'IPO not found', slug });
+    await runTracked(res, { type: 'tool-markdown', params: { slug, docType, start, end }, longOp: true, wait },
+      (log) => tools.getPageMarkdown(ipo, docType, start, end, log));
+  }));
+
+  // POST /tools/suggest-schema — give the LLM a PDF slice + a prompt; it proposes
+  // new schema fields. Body: { slug, docType?, prompt, start?, end? }.
+  app.post('/tools/suggest-schema', asyncH(async (req, res) => {
+    const { slug, docType = 'auto', prompt, start = 0, end, wait = false } = req.body || {};
+    if (!prompt) return res.status(400).json({ error: 'prompt is required' });
+    const ipo = await findBySlug(slug);
+    if (!ipo) return res.status(404).json({ error: 'IPO not found', slug });
+    await runTracked(res, { type: 'tool-suggest-schema', params: { slug, docType, prompt }, longOp: true, wait },
+      (log) => tools.suggestSchema(ipo, docType, prompt, { start, end }, log));
+  }));
 
   app.use((req, res) => res.status(404).json({ error: 'Not found', path: req.path }));
   return app;
