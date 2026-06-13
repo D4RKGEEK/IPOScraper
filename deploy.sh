@@ -19,7 +19,8 @@ set -euo pipefail
 DEPLOY_HOST="${DEPLOY_HOST:-root@YOUR_DROPLET_IP}"
 REMOTE_DIR="${REMOTE_DIR:-/opt/nse/app}"
 BRANCH="${BRANCH:-$(git rev-parse --abbrev-ref HEAD)}"
-REPO_URL="${REPO_URL:-$(git config --get remote.origin.url || true)}"
+GIT_REMOTE="${GIT_REMOTE:-origin}"   # which local remote to push/clone from (e.g. github)
+REPO_URL="${REPO_URL:-$(git config --get remote.$GIT_REMOTE.url || true)}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MODE="${1:-server-build}"
 
@@ -34,8 +35,8 @@ ssh "$DEPLOY_HOST" 'bash -s' < "$SCRIPT_DIR/scripts/ensure-swap.sh"
 # ── Step 2: make sure the server has the latest code ──────────────────────────
 if [[ "$MODE" != "--local-build" ]]; then
   if [[ -n "$REPO_URL" ]]; then
-    echo "→ [2/3] pushing $BRANCH to origin so the server can pull it"
-    git push origin "$BRANCH"
+    echo "→ [2/3] pushing $BRANCH to $GIT_REMOTE so the server can pull it"
+    git push "$GIT_REMOTE" "$BRANCH"
   fi
 fi
 

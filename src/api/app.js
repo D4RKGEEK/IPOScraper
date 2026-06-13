@@ -463,6 +463,9 @@ function buildApp(opts = {}) {
     if (status) filter.status = status;
     if (docType) filter.docType = docType;
     if (pipeline) filter.pipeline = pipeline;
+    // The review queue shouldn't list docs a better one has replaced (e.g. a
+    // DRHP superseded by the RHP) — there's nothing to action there.
+    if (status === 'review') filter.superseded = { $ne: true };
     const docs = await collections.extractions()
       .find(filter)
       .sort({ extractedAt: -1 })
@@ -474,6 +477,7 @@ function buildApp(opts = {}) {
         docType: r.docType,
         pipeline: r.pipeline,
         status: r.status,
+        superseded: !!r.superseded,
         extractedAt: r.extractedAt,
         reviewedAt: r.reviewedAt || null,
         companyName: r.result?.company_name || null,
@@ -506,6 +510,8 @@ function buildApp(opts = {}) {
 
     const r = await collections.extractions().updateOne(filter, { $set: set });
     if (!r.matchedCount) return res.status(404).json({ error: 'No matching extraction', slug: req.params.slug, docType, pipeline });
+    // Keep the IPO's denormalized current-extraction pointer in step with the edit.
+    await reconcileExtractions(req.params.slug);
     res.json({ updated: req.params.slug, docType, pipeline, status: status || undefined });
   }));
 
@@ -535,6 +541,8 @@ function buildApp(opts = {}) {
       await collections.extractions().updateOne({ _id: d._id }, { $set: set });
       scored.push({ docType: d.docType, pipeline: d.pipeline, score: validation.score, status: set.status || d.status, failed: validation.failed });
     }
+    // Re-scoring can flip statuses → refresh the IPO's current-extraction pointer.
+    await reconcileExtractions(req.params.slug);
     res.json({ slug: req.params.slug, scored });
   }));
 
