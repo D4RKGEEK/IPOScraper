@@ -49,7 +49,7 @@ function convertSectionToHtml(outputDir, section, logMsg) {
 async function firecrawlParse(htmlPath, section, ipoSlug, logMsg) {
   // Check cache first
   const cacheKey = generateCacheKey('firecrawl', `firecrawl_v2_${section}_${ipoSlug}`);
-  const cached = getCachedResponse(cacheKey);
+  const cached = await getCachedResponse(cacheKey);
   if (cached) {
     log.info({ section, ipoSlug }, 'firecrawl cache hit (loaded from disk cache)');
     if (logMsg) logMsg(`Firecrawl cache hit for section ${section} (loaded from disk cache)`);
@@ -104,7 +104,7 @@ async function firecrawlParse(htmlPath, section, ipoSlug, logMsg) {
   }
 
   // Cache the result
-  setCachedResponse(cacheKey, extracted);
+  await setCachedResponse(cacheKey, extracted);
 
   // Save per-section result
   const savePath = path.join(path.dirname(htmlPath), `summary_${section}.json`);

@@ -753,6 +753,7 @@ function app() {
       ]},
       { section: 'Configure', items: [
         { id:'schema', label:'Schema', icon:'M4 7V4h16v3M9 20h6M12 4v16' },
+        { id:'validation', label:'Validation', icon:'M9 12l2 2 4-4M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0z' },
         { id:'sections', label:'Sections', icon:'M3 3h7v7H3zM14 3h7v7h-7zM14 14h7v7h-7zM3 14h7v7H3z' },
         { id:'lab', label:'PDF Lab', icon:'M9 2v6l-5 9a2 2 0 0 0 2 3h12a2 2 0 0 0 2-3l-5-9V2' },
         { id:'control', label:'Control', icon:'M12 2a10 10 0 1 0 10 10M12 6v6l4 2' },
@@ -778,6 +779,12 @@ function app() {
     // schema editor
     schemaDraft:{}, schemaJsonMode:false, schemaJsonText:'', addFieldOpen:false, schemaSearch:'',
     newField:{key:'',type:'string',format:'',description:'',subFields:[{key:'',description:''}]},
+    // validation editor
+    validation:{rules:[],threshold:80,ruleTypes:{}},
+    valDraft:{rules:[],threshold:80}, valJsonMode:false, valJsonText:'', valSearch:'',
+    severities:['error','warning','info'],
+    // AI-assisted config editing (shared by schema + validation editors)
+    aiBox:{ schema:{prompt:'',busy:false,proposal:null,error:''}, validation:{prompt:'',busy:false,proposal:null,error:''} },
     // sections editor
     sectionDraft:{aliases:{},targets:[]}, addSectionOpen:false, newSection:{key:'',aliases:'',target:true}, sectionSearch:'',
     // pdf lab
@@ -809,6 +816,7 @@ function app() {
       await this.refreshAll();
       if (!this._tick) this._tick = setInterval(() => { if (this.jobAutoRefresh) this.tickJobs(); }, 4000);
       this.$watch('schemaJsonMode', v => { if (v) this.schemaJsonText = JSON.stringify(this.schemaDraft, null, 2); else { try { this.schemaDraft = JSON.parse(this.schemaJsonText); } catch (e) { this.notify('Invalid JSON: ' + e.message, true); } } });
+      this.$watch('valJsonMode', v => { if (v) this.valJsonText = JSON.stringify(this.valDraft.rules, null, 2); else { try { this.valDraft.rules = JSON.parse(this.valJsonText); } catch (e) { this.notify('Invalid JSON: ' + e.message, true); } } });
     },
 
     authHeaders() { return this.token ? { Authorization: 'Bearer ' + this.token } : {}; },
@@ -829,6 +837,7 @@ function app() {
     go(id){ this.page=id;
       if(id==='overview'){ this.loadStats(); }
       if(id==='schema'){ this.schemaDraft=JSON.parse(JSON.stringify(this.schema)); }
+      if(id==='validation'){ this.loadValidation(); }
       if(id==='sections'){ this.loadSections(); }
     },
     toggleTheme(){ this.dark=!this.dark; document.documentElement.classList.toggle('dark',this.dark); localStorage.setItem('theme',this.dark?'dark':'light'); if(this.page==='overview') this.renderCharts(); },
@@ -970,6 +979,20 @@ function app() {
     commitNewField(){ const nf=this.newField; if(!nf.key){ this.notify('key required',true); return; } const def={type:nf.type,description:nf.description}; if(nf.type==='string'&&nf.format) def.format=nf.format; if(nf.type==='objectList'){ def.fields={}; for(const sf of nf.subFields){ if(sf.key) def.fields[sf.key]={type:'string',description:sf.description||''}; } if(!Object.keys(def.fields).length){ this.notify('objectList needs ≥1 column',true); return; } } this.schemaDraft[nf.key]=def; this.addFieldOpen=false; this.newField={key:'',type:'string',format:'',description:'',subFields:[{key:'',description:''}]}; this.notify('Field added to draft — click Save schema'); },
     async saveSchema(){ try{ const fields=this.schemaJsonMode?JSON.parse(this.schemaJsonText):this.schemaDraft; const r=await this.api('/schema',{method:'PUT',headers:{'content-type':'application/json'},body:JSON.stringify({fields})}); this.schema=r.fields; this.schemaKeys=Object.keys(r.fields); this.schemaDraft=JSON.parse(JSON.stringify(r.fields)); this.notify('Schema saved ('+this.schemaKeys.length+' fields)'); }catch(e){ this.notify(e.message,true); } },
     async resetSchema(){ if(!confirm('Reset schema to built-in default?')) return; try{ const r=await this.api('/schema/reset',{method:'POST'}); this.schema=r.fields; this.schemaKeys=Object.keys(r.fields); this.schemaDraft=JSON.parse(JSON.stringify(r.fields)); this.notify('Schema reset'); }catch(e){ this.notify(e.message,true); } },
+
+    // ── VALIDATION EDITOR ──
+    async loadValidation(){ try{ const r=await this.api('/validation'); this.validation=r; this.valDraft={rules:JSON.parse(JSON.stringify(r.rules)),threshold:r.threshold}; }catch(e){ this.notify(e.message,true); } },
+    valTypeParams(t){ return (this.validation.ruleTypes?.[t]?.params)||[]; },
+    addValRule(){ this.valDraft.rules.push({id:'rule_'+(this.valDraft.rules.length+1),field:'',type:'required',severity:'warning',weight:5,enabled:true,description:'',params:{}}); },
+    delValRule(i){ this.valDraft.rules.splice(i,1); },
+    filteredValRules(){ const q=this.valSearch.trim().toLowerCase(); return this.valDraft.rules.map((r,i)=>({r,i})).filter(({r})=>!q||r.id.toLowerCase().includes(q)||(r.field||'').toLowerCase().includes(q)||(r.type||'').includes(q)); },
+    async saveValidation(){ try{ const rules=this.valJsonMode?JSON.parse(this.valJsonText):this.valDraft.rules; const r=await this.api('/validation',{method:'PUT',headers:{'content-type':'application/json'},body:JSON.stringify({rules,threshold:Number(this.valDraft.threshold)})}); this.validation={...this.validation,rules:r.rules,threshold:r.threshold}; this.valDraft={rules:JSON.parse(JSON.stringify(r.rules)),threshold:r.threshold}; this.notify('Validation saved ('+r.rules.length+' rules)'); }catch(e){ this.notify(e.message,true); } },
+    async resetValidation(){ if(!confirm('Reset validation rules to default?')) return; try{ const r=await this.api('/validation/reset',{method:'POST'}); this.validation={...this.validation,rules:r.rules,threshold:r.threshold}; this.valDraft={rules:JSON.parse(JSON.stringify(r.rules)),threshold:r.threshold}; this.notify('Validation reset'); }catch(e){ this.notify(e.message,true); } },
+
+    // ── AI-ASSISTED CONFIG EDITING (schema | validation) ──
+    async aiEdit(target){ const box=this.aiBox[target]; if(!box.prompt.trim()){ this.notify('Type what you want changed',true); return; } box.busy=true; box.proposal=null; box.error=''; try{ const r=await this.api('/'+target+'/ai',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({instruction:box.prompt})}); box.proposal=r; }catch(e){ box.error=e.message; } finally{ box.busy=false; } },
+    async applyAiProposal(target){ const box=this.aiBox[target]; if(!box.proposal) return; try{ if(target==='schema'){ const r=await this.api('/schema',{method:'PUT',headers:{'content-type':'application/json'},body:JSON.stringify({fields:box.proposal.proposed})}); this.schema=r.fields; this.schemaKeys=Object.keys(r.fields); this.schemaDraft=JSON.parse(JSON.stringify(r.fields)); } else { const r=await this.api('/validation',{method:'PUT',headers:{'content-type':'application/json'},body:JSON.stringify({rules:box.proposal.proposed,threshold:box.proposal.threshold})}); this.validation={...this.validation,rules:r.rules,threshold:r.threshold}; this.valDraft={rules:JSON.parse(JSON.stringify(r.rules)),threshold:r.threshold}; } this.notify('AI changes applied (backup saved)'); box.proposal=null; box.prompt=''; }catch(e){ this.notify(e.message,true); } },
+    aiDiffCount(box){ const d=box.proposal?.diff||{}; return (d.added?.length||0)+(d.removed?.length||0)+(d.changed?.length||0); },
 
     // ── SECTIONS EDITOR ──
     async loadSections(){ try{ const r=await this.api('/config/sections'); this.sectionDraft={aliases:JSON.parse(JSON.stringify(r.aliases)),targets:[...r.targets]}; }catch(e){ this.notify(e.message,true); } },

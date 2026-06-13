@@ -9,8 +9,12 @@
  */
 
 const { collections } = require('./mongo');
-const { toIpoDoc } = require('./ipoModel');
+const { toIpoDoc, reconcileExtractionState } = require('./ipoModel');
 const { slugify } = require('../utils/slug');
+const r2 = require('../storage/r2');
+const { logger } = require('../utils/logger');
+
+const log = logger.child({ module: 'ipoRepository' });
 
 const norm = (s) => String(s || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
 
@@ -175,7 +179,60 @@ async function query(q = {}) {
   return { data, pagination: { page, limit, total, hasMore: page * limit < total } };
 }
 
+/**
+ * Reconcile all extraction rows for an IPO after one finishes.
+ *
+ * - Flags lower-priority docs `superseded` once a better doc (final > rhp >
+ *   drhp) has a usable extraction.
+ * - Denormalizes a single `extraction` summary onto the IPO so the dashboard/
+ *   API has one obvious "live data" pointer without joining the extractions
+ *   collection.
+ * - Purges the cached markdown of superseded docs from R2 so the bucket only
+ *   ever holds the current document per IPO.
+ *
+ * @param {string} ipoSlug
+ * @returns {Promise<{currentDocType: string|null, supersededDocTypes: string[]}>}
+ */
+async function reconcileExtractions(ipoSlug) {
+  const exCol = collections.extractions();
+  const rows = await exCol
+    .find({ ipoSlug })
+    .project({ docType: 1, pipeline: 1, status: 1, superseded: 1, 'validation.score': 1, extractedAt: 1 })
+    .toArray();
+
+  const state = reconcileExtractionState(rows);
+
+  // Persist the superseded flag per row (only write when it changed).
+  await Promise.all(rows.map((row) => {
+    const flag = state.rows.find((f) => f.docType === row.docType && f.pipeline === row.pipeline);
+    if (!flag || !!row.superseded === flag.superseded) return null;
+    return exCol.updateOne(
+      { ipoSlug, docType: row.docType, pipeline: row.pipeline },
+      { $set: { superseded: flag.superseded } },
+    );
+  }).filter(Boolean));
+
+  // Denormalize the current-extraction pointer onto the IPO.
+  await collections.ipos().updateOne(
+    { slug: ipoSlug },
+    { $set: { extraction: state.current } },
+  );
+
+  // Keep R2 minimal: drop markdown for any doc that's now superseded.
+  for (const docType of state.supersededDocTypes) {
+    await r2.deleteMarkdown(ipoSlug, docType);
+  }
+
+  log.debug({ ipoSlug, current: state.currentDocType, superseded: state.supersededDocTypes }, 'reconciled extractions');
+  return { currentDocType: state.currentDocType, supersededDocTypes: state.supersededDocTypes };
+}
+
 async function deleteBySlug(slug) {
+  // Cascade: remove extraction rows and purge the IPO's cached markdown so no
+  // orphans linger in Mongo or R2.
+  await collections.extractions().deleteMany({ ipoSlug: slug }).catch((e) =>
+    log.warn({ slug, err: e.message }, 'failed to delete extractions for slug'));
+  await r2.deleteIpo(slug);
   return collections.ipos().deleteOne({ slug });
 }
 
@@ -188,4 +245,4 @@ async function recordError(slug, operation, message) {
   );
 }
 
-module.exports = { upsertRecord, findBySlug, query, deleteBySlug, recordError, findExisting, resolveSlug, diffFields, mergeDocuments };
+module.exports = { upsertRecord, findBySlug, query, deleteBySlug, recordError, findExisting, resolveSlug, diffFields, mergeDocuments, reconcileExtractions };

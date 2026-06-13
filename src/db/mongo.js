@@ -22,7 +22,26 @@ async function connect() {
   await client.connect();
   db = client.db(DB_NAME);
   await ensureIndexes(db);
+  await normalizeData(db);
   return db;
+}
+
+/**
+ * One-time, idempotent data normalizations. Self-clearing — once the corpus is
+ * migrated each updateMany matches 0 docs.
+ *
+ * - extraction status 'pending_review' → 'review' (the canonical value the
+ *   dashboard review queue, KPI and resolve button all key on).
+ */
+async function normalizeData(database) {
+  try {
+    await database.collection('extractions').updateMany(
+      { status: 'pending_review' },
+      { $set: { status: 'review' } },
+    );
+  } catch (e) {
+    // Non-fatal: a normalization failure must not block startup.
+  }
 }
 
 async function ensureIndexes(database) {
@@ -45,10 +64,14 @@ async function ensureIndexes(database) {
   const extractions = database.collection('extractions');
   await extractions.createIndex({ ipoSlug: 1, docType: 1, pipeline: 1 }, { unique: true });
   await extractions.createIndex({ status: 1 });
+  await extractions.createIndex({ superseded: 1 });
 
   const cache = database.collection('extraction_cache');
   await cache.createIndex({ key: 1 }, { unique: true });
   await cache.createIndex({ updatedAt: 1 }, { expireAfterSeconds: 7 * 24 * 3600 }); // auto-expire after 7 days
+
+  const configBackups = database.collection('config_backups');
+  await configBackups.createIndex({ key: 1, createdAt: -1 });
 }
 
 function getDb() {
@@ -63,6 +86,7 @@ const collections = {
   extractions: () => getDb().collection('extractions'),
   extractionCache: () => getDb().collection('extraction_cache'),
   config: () => getDb().collection('config'),
+  configBackups: () => getDb().collection('config_backups'),
 };
 
 async function close() {

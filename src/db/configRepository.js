@@ -16,6 +16,7 @@
 const { collections } = require('./mongo');
 const schemaStore = require('../extraction/llm/schema');
 const sectionConfig = require('../extraction/config');
+const validation = require('../extraction/validate');
 const { logger } = require('../utils/logger');
 
 const log = logger.child({ module: 'config-repo' });
@@ -52,6 +53,80 @@ async function loadConfig() {
   } catch (e) {
     log.warn({ err: e.message }, 'persisted sections invalid; keeping built-in default');
   }
+
+  // ── Validation rules ──────────────────────────────────────────────────────
+  try {
+    const doc = await collections.config().findOne({ _id: 'validation' });
+    if (doc && doc.rules) {
+      validation.setRules(doc.rules); // validates; throws on bad data
+      if (doc.threshold != null) validation.setThreshold(doc.threshold);
+      log.info({ rules: doc.rules.length }, 'loaded persisted validation rules');
+    } else {
+      log.info('no persisted validation rules; using built-in default');
+    }
+  } catch (e) {
+    log.warn({ err: e.message }, 'persisted validation rules invalid; keeping built-in default');
+  }
+}
+
+// ── Backups ──────────────────────────────────────────────────────────────────
+// Every change to a config doc (schema / sections / validation), whether manual
+// or AI-assisted, snapshots the PREVIOUS persisted version into `config_backups`
+// first — so any edit is reversible. We keep the last MAX_BACKUPS per key.
+
+const { ObjectId } = require('mongodb');
+const MAX_BACKUPS = 25;
+
+/** Snapshot the current persisted config doc for `key` before it is overwritten. */
+async function backupConfig(key, reason = 'edit') {
+  const current = await collections.config().findOne({ _id: key });
+  if (!current) return null; // nothing persisted yet (still on built-in default)
+  const { _id, ...snapshot } = current;
+  const res = await collections.configBackups().insertOne({
+    key, snapshot, reason, createdAt: new Date().toISOString(),
+  });
+  // Prune to the most recent MAX_BACKUPS for this key.
+  const stale = await collections.configBackups()
+    .find({ key }).sort({ createdAt: -1 }).skip(MAX_BACKUPS).project({ _id: 1 }).toArray();
+  if (stale.length) await collections.configBackups().deleteMany({ _id: { $in: stale.map((d) => d._id) } });
+  return res.insertedId.toString();
+}
+
+/** List recent backups for a key (newest first), without the full snapshot blob. */
+async function listBackups(key) {
+  const filter = key ? { key } : {};
+  const docs = await collections.configBackups()
+    .find(filter).sort({ createdAt: -1 }).limit(MAX_BACKUPS).toArray();
+  return docs.map((d) => ({
+    id: d._id.toString(),
+    key: d.key,
+    reason: d.reason,
+    createdAt: d.createdAt,
+    summary: d.key === 'validation'
+      ? { rules: d.snapshot.rules?.length, threshold: d.snapshot.threshold }
+      : d.key === 'schema'
+        ? { fields: Object.keys(d.snapshot.fields || {}).length }
+        : { targets: d.snapshot.targets?.length },
+  }));
+}
+
+/**
+ * Restore a backup by id. Re-applies its snapshot through the SAME validating
+ * save path (so it can't restore invalid data), backing up the current state
+ * first. Returns the restored config.
+ */
+async function restoreBackup(id) {
+  let _id;
+  try { _id = new ObjectId(id); } catch { throw new Error('invalid backup id'); }
+  const b = await collections.configBackups().findOne({ _id });
+  if (!b) throw new Error('backup not found');
+  const s = b.snapshot || {};
+  switch (b.key) {
+    case 'schema': return saveSchema(s.fields, `restore:${id}`);
+    case 'sections': return saveSections({ aliases: s.aliases, targets: s.targets }, `restore:${id}`);
+    case 'validation': return saveValidation({ rules: s.rules, threshold: s.threshold }, `restore:${id}`);
+    default: throw new Error(`cannot restore unknown config key "${b.key}"`);
+  }
 }
 
 /**
@@ -60,8 +135,9 @@ async function loadConfig() {
  * @param {object} fields  Candidate FIELDS registry
  * @returns {Promise<object>} The applied (sanitized) fields
  */
-async function saveSchema(fields) {
+async function saveSchema(fields, reason = 'edit') {
   const applied = schemaStore.setFields(fields); // validates first
+  await backupConfig('schema', reason);          // snapshot previous version
   await collections.config().updateOne(
     { _id: 'schema' },
     { $set: { fields: applied, updatedAt: new Date().toISOString() } },
@@ -86,9 +162,10 @@ async function resetSchema() {
  * @param {object} [opts.aliases]  SECTION_ALIASES dictionary
  * @param {string[]} [opts.targets]  TARGET_SECTIONS list
  */
-async function saveSections({ aliases, targets } = {}) {
+async function saveSections({ aliases, targets } = {}, reason = 'edit') {
   if (aliases) sectionConfig.setSectionAliases(aliases);
   if (targets) sectionConfig.setTargetSections(targets);
+  await backupConfig('sections', reason);
   await collections.config().updateOne(
     { _id: 'sections' },
     {
@@ -112,4 +189,38 @@ async function resetSections() {
   return { aliases: sectionConfig.getSectionAliases(), targets: sectionConfig.getTargetSections() };
 }
 
-module.exports = { loadConfig, saveSchema, resetSchema, saveSections, resetSections };
+/**
+ * Validate + apply + persist the validation ruleset (and optional threshold).
+ * Throws (without persisting) if the candidate is invalid.
+ * @param {object} opts
+ * @param {object[]} [opts.rules]    candidate ruleset
+ * @param {number}   [opts.threshold] pass/review cutoff (0–100)
+ */
+async function saveValidation({ rules, threshold } = {}, reason = 'edit') {
+  if (rules) validation.setRules(rules);              // validates first
+  if (threshold != null) validation.setThreshold(threshold);
+  await backupConfig('validation', reason);
+  await collections.config().updateOne(
+    { _id: 'validation' },
+    { $set: { rules: validation.getRules(), threshold: validation.getThreshold(), updatedAt: new Date().toISOString() } },
+    { upsert: true },
+  );
+  log.info({ rules: validation.getRules().length }, 'validation rules saved');
+  return { rules: validation.getRules(), threshold: validation.getThreshold() };
+}
+
+/** Reset validation rules to defaults and clear the persisted override. */
+async function resetValidation() {
+  validation.resetRules();
+  await collections.config().deleteOne({ _id: 'validation' });
+  log.info('validation rules reset to default');
+  return { rules: validation.getRules(), threshold: validation.getThreshold() };
+}
+
+module.exports = {
+  loadConfig,
+  saveSchema, resetSchema,
+  saveSections, resetSections,
+  saveValidation, resetValidation,
+  backupConfig, listBackups, restoreBackup,
+};

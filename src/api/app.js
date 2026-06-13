@@ -7,7 +7,7 @@
 
 const path = require('path');
 const express = require('express');
-const { query, findBySlug, deleteBySlug } = require('../db/ipoRepository');
+const { query, findBySlug, deleteBySlug, reconcileExtractions } = require('../db/ipoRepository');
 const { collections } = require('../db/mongo');
 const { runScrape, ALL_SOURCES } = require('../services/scrapeService');
 const { runGmp } = require('../services/gmpService');
@@ -15,6 +15,8 @@ const { runHistorical } = require('../services/historicalService');
 const { runExtraction, runBulkExtraction } = require('../extraction');
 const schemaStore = require('../extraction/llm/schema');
 const sectionConfig = require('../extraction/config');
+const validationStore = require('../extraction/validate');
+const { aiEditSchema, aiEditValidation } = require('../extraction/ai-edit');
 const configRepo = require('../db/configRepository');
 const tools = require('../extraction/tools');
 const { createJob, appendLog, completeJob, failJob, getJob, listJobs } = require('../db/jobRepository');
@@ -142,6 +144,15 @@ function buildApp(opts = {}) {
     res.status(400).json({ error: e.message });
   });
 
+  // Wrapper for AI-edit endpoints. A 422 means the model produced structurally
+  // invalid config (we never apply it) — return the raw output so the UI can
+  // show what came back and let the user refine the instruction.
+  const aiH = (fn) => (req, res) => fn(req, res).catch((e) => {
+    const status = e.status === 422 ? 422 : 400;
+    logger.warn({ err: e.message, path: req.path }, 'ai edit failed');
+    res.status(status).json({ error: e.message, ...(e.raw ? { raw: e.raw } : {}) });
+  });
+
   // PUT /schema — replace the whole field registry. Body: { fields }.
   app.put('/schema', cfgH(async (req, res) => {
     const fields = req.body?.fields ?? req.body;
@@ -172,6 +183,17 @@ function buildApp(opts = {}) {
     res.json({ fields: await configRepo.resetSchema() });
   }));
 
+  // POST /schema/ai — edit the schema from a freeform instruction. The LLM's
+  // output is HARD-VALIDATED before anything is returned/applied. Preview by
+  // default; pass { apply: true } to persist (a backup is taken automatically).
+  // Body: { instruction, apply? }.
+  app.post('/schema/ai', aiH(async (req, res) => {
+    const { instruction, apply = false } = req.body || {};
+    const out = await aiEditSchema(instruction);
+    if (apply) out.applied = await configRepo.saveSchema(out.proposed, 'ai');
+    res.json({ ...out, persisted: !!apply });
+  }));
+
   // GET /config/sections — section alias dictionary + which sections are targeted.
   app.get('/config/sections', (_req, res) => {
     res.json({
@@ -193,6 +215,64 @@ function buildApp(opts = {}) {
   // POST /config/sections/reset — restore default sections.
   app.post('/config/sections/reset', cfgH(async (_req, res) => {
     res.json(await configRepo.resetSections());
+  }));
+
+  // ── Validation rules (dashboard-editable, like the schema) ─────────────────
+
+  // GET /validation — current ruleset + threshold + defaults + type metadata.
+  app.get('/validation', (_req, res) => {
+    res.json({
+      rules: validationStore.getRules(),
+      threshold: validationStore.getThreshold(),
+      ruleTypes: validationStore.RULE_TYPES,
+      defaults: { rules: validationStore.getDefaultRules(), threshold: validationStore.DEFAULT_THRESHOLD },
+    });
+  });
+
+  // PUT /validation — replace the whole ruleset. Body: { rules?, threshold? }.
+  app.put('/validation', cfgH(async (req, res) => {
+    const { rules, threshold } = req.body || {};
+    res.json(await configRepo.saveValidation({ rules, threshold }));
+  }));
+
+  // POST /validation/rule — add or update one rule. Body: { rule }.
+  app.post('/validation/rule', cfgH(async (req, res) => {
+    const rule = req.body?.rule ?? req.body;
+    if (!rule || !rule.id) throw new Error('body requires { rule } with an id');
+    const rules = validationStore.getRules().filter((r) => r.id !== rule.id).concat([rule]);
+    res.json(await configRepo.saveValidation({ rules }));
+  }));
+
+  // DELETE /validation/rule/:id — remove one rule.
+  app.delete('/validation/rule/:id', cfgH(async (req, res) => {
+    const rules = validationStore.getRules();
+    if (!rules.some((r) => r.id === req.params.id)) return res.status(404).json({ error: `No rule "${req.params.id}"` });
+    res.json(await configRepo.saveValidation({ rules: rules.filter((r) => r.id !== req.params.id) }));
+  }));
+
+  // POST /validation/reset — restore the built-in default ruleset.
+  app.post('/validation/reset', cfgH(async (_req, res) => {
+    res.json(await configRepo.resetValidation());
+  }));
+
+  // POST /validation/ai — edit the validation rules from a freeform instruction.
+  // LLM output is HARD-VALIDATED before return/apply. Preview by default; pass
+  // { apply: true } to persist (auto-backup). Body: { instruction, apply? }.
+  app.post('/validation/ai', aiH(async (req, res) => {
+    const { instruction, apply = false } = req.body || {};
+    const out = await aiEditValidation(instruction);
+    if (apply) out.applied = await configRepo.saveValidation({ rules: out.proposed, threshold: out.threshold }, 'ai');
+    res.json({ ...out, persisted: !!apply });
+  }));
+
+  // GET /config/backups?key=schema|sections|validation — recent reversible snapshots.
+  app.get('/config/backups', asyncH(async (req, res) => {
+    res.json({ backups: await configRepo.listBackups(req.query.key) });
+  }));
+
+  // POST /config/backups/:id/restore — roll a config back to a snapshot.
+  app.post('/config/backups/:id/restore', cfgH(async (req, res) => {
+    res.json({ restored: req.params.id, config: await configRepo.restoreBackup(req.params.id) });
   }));
 
   // API 1: GET /ipos — meta/index
@@ -397,6 +477,7 @@ function buildApp(opts = {}) {
         extractedAt: r.extractedAt,
         reviewedAt: r.reviewedAt || null,
         companyName: r.result?.company_name || null,
+        score: r.validation?.score ?? null,
         usage: r.usage || null,
       })),
     });
@@ -426,6 +507,35 @@ function buildApp(opts = {}) {
     const r = await collections.extractions().updateOne(filter, { $set: set });
     if (!r.matchedCount) return res.status(404).json({ error: 'No matching extraction', slug: req.params.slug, docType, pipeline });
     res.json({ updated: req.params.slug, docType, pipeline, status: status || undefined });
+  }));
+
+  // POST /extractions/:slug/validate — re-score stored extraction(s) against the
+  // CURRENT ruleset, with NO LLM call. Use after editing rules, or to re-check a
+  // human-corrected result. Body: { docType?, pipeline? } narrows which to score.
+  // Does not overwrite a result already marked 'approved'/'reviewed' back to
+  // pending_review unless it was auto-status ('completed'/'pending_review'/'review').
+  app.post('/extractions/:slug/validate', asyncH(async (req, res) => {
+    const { docType, pipeline } = req.body || {};
+    const filter = { ipoSlug: req.params.slug };
+    if (docType) filter.docType = docType;
+    if (pipeline) filter.pipeline = pipeline;
+
+    const docs = await collections.extractions().find(filter).toArray();
+    if (!docs.length) return res.status(404).json({ error: 'No matching extraction', slug: req.params.slug });
+
+    const ipo = await findBySlug(req.params.slug);
+    const AUTO = new Set(['completed', 'pending_review', 'review', 'failed']);
+    const scored = [];
+    for (const d of docs) {
+      if (!d.result || d.pipeline === 'both') continue; // 'both' stores per-engine; skip
+      const validation = validationStore.validateExtraction(d.result, ipo || {});
+      const set = { validation };
+      // Only move auto-managed statuses; never override a human decision.
+      if (AUTO.has(d.status)) set.status = validation.status === 'pass' ? 'completed' : 'review';
+      await collections.extractions().updateOne({ _id: d._id }, { $set: set });
+      scored.push({ docType: d.docType, pipeline: d.pipeline, score: validation.score, status: set.status || d.status, failed: validation.failed });
+    }
+    res.json({ slug: req.params.slug, scored });
   }));
 
 
