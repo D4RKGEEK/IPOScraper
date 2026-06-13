@@ -85,7 +85,7 @@ function buildApp(opts = {}) {
     const jobId = await createJob(type, params);
     // Serialize log writes so they persist in call order (services call log() without await).
     let logChain = Promise.resolve();
-    const log = (msg) => { logChain = logChain.then(() => appendLog(jobId, msg)); return logChain; };
+    const log = (msg, extra) => { logChain = logChain.then(() => appendLog(jobId, msg, extra)); return logChain; };
     const work = async () => {
       const t0 = Date.now();
       try {
