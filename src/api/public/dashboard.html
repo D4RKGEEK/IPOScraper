@@ -1298,18 +1298,27 @@
                   class="px-3 py-1.5 rounded-md text-xs text-rose-500 hover:bg-rose-500/10">Reset to default</button>
               </div>
             </div>
-            <!-- Drag-and-drop cascade editor -->
+            <!-- Simple cascade editor with up/down buttons -->
             <div class="rounded-xl border bg-card p-4 space-y-3">
-              <p class="text-xs text-muted-foreground">Drag and drop to reorder (Firecrawl always runs first)</p>
-              <div class="space-y-2" x-ref="cascadeList">
+              <p class="text-xs text-muted-foreground">Use ↑ ↓ arrows to reorder (Firecrawl always runs first)</p>
+              <div class="space-y-2">
                 <template x-for="(engine, index) in cascadeDraft.order.filter(e => e !== 'firecrawl')" :key="engine">
-                  <div
-                    class="flex items-center gap-3 p-3 rounded-lg border bg-background hover:border-accent/50 transition cursor-grab active:cursor-grabbing"
-                    @dragstart="dragStart($event, index)" @dragover="dragOver($event)" @drop="drop($event, index)">
-                    <svg class="h-5 w-5 text-muted-foreground shrink-0" viewBox="0 0 24 24" fill="none"
-                      stroke="currentColor" stroke-width="2">
-                      <path d="M4 8h16M4 16h16" />
-                    </svg>
+                  <div class="flex items-center gap-3 p-3 rounded-lg border bg-background">
+                    <div class="flex flex-col gap-0.5">
+                      <button @click="moveEngineUp(index)" :disabled="index===0"
+                        class="text-muted-foreground hover:text-foreground disabled:opacity-30 disabled:cursor-not-allowed">
+                        <svg class="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                          <path d="M18 15l-6-6-6 6" />
+                        </svg>
+                      </button>
+                      <button @click="moveEngineDown(index)"
+                        :disabled="index===cascadeDraft.order.filter(e => e !== 'firecrawl').length-1"
+                        class="text-muted-foreground hover:text-foreground disabled:opacity-30 disabled:cursor-not-allowed">
+                        <svg class="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                          <path d="M6 9l6 6 6-6" />
+                        </svg>
+                      </button>
+                    </div>
                     <span class="text-sm font-medium" x-text="engine"></span>
                     <span class="text-xs text-muted-foreground ml-auto">
                       <template x-if="engine==='gemini'">Gemini 2.5 Flash</template>
@@ -1504,7 +1513,8 @@
               class="bg-zinc-950 text-zinc-100 p-3 font-mono text-xs max-h-40 overflow-auto scroll-thin space-y-0.5">
               <template x-for="(l,i) in (lab.job?.logs||[])" :key="i">
                 <div class="flex gap-2"><span class="text-zinc-600 shrink-0" x-text="(l.at||'').slice(11,19)"></span>
-                  <span :class="logClass(l.msg)" x-text="l.msg"></span></div>
+                  <span :class="logClass(l.msg)" x-text="l.msg"></span>
+                </div>
               </template>
               <div class="flex items-center gap-1.5 text-zinc-500 pt-1"><span
                   class="live-dot">▍</span><span>running…</span></div>
@@ -2149,6 +2159,7 @@
             section: 'Configure', items: [
               { id: 'schema', label: 'Schema', icon: 'M4 7V4h16v3M9 20h6M12 4v16' },
               { id: 'validation', label: 'Validation', icon: 'M9 12l2 2 4-4M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0z' },
+              { id: 'cascade', label: 'Cascade', icon: 'M3 3l7 7-7 7M11 3l7 7-7 7' },
               { id: 'sections', label: 'Sections', icon: 'M3 3h7v7H3zM14 3h7v7h-7zM14 14h7v7h-7zM3 14h7v7H3z' },
               { id: 'lab', label: 'PDF Lab', icon: 'M9 2v6l-5 9a2 2 0 0 0 2 3h12a2 2 0 0 0 2-3l-5-9V2' },
               { id: 'control', label: 'Control', icon: 'M12 2a10 10 0 1 0 10 10M12 6v6l4 2' },
@@ -2252,6 +2263,7 @@
           if (id === 'validation') { this.loadValidation(); }
           if (id === 'eval') { this.loadEval(); }
           if (id === 'sections') { this.loadSections(); }
+          if (id === 'cascade') { this.loadCascade(); }
         },
         toggleTheme() { this.dark = !this.dark; document.documentElement.classList.toggle('dark', this.dark); localStorage.setItem('theme', this.dark ? 'dark' : 'light'); if (this.page === 'overview') this.renderCharts(); },
 
@@ -2440,6 +2452,16 @@
         async openBackups(key) { this.backups.key = key; this.backups.open = true; this.backups.items = []; try { const r = await this.api('/config/backups?key=' + key); this.backups.items = r.backups; } catch (e) { this.notify(e.message, true); } },
         backupSummary(b) { const s = b.summary || {}; if (b.key === 'validation') return (s.rules ?? '?') + ' rules · threshold ' + (s.threshold ?? '?'); if (b.key === 'schema') return (s.fields ?? '?') + ' fields'; return (s.targets ?? '?') + ' target sections'; },
         async doRestore(id) { if (!confirm('Restore this snapshot? Your current config is backed up first.')) return; try { await this.api('/config/backups/' + id + '/restore', { method: 'POST' }); this.notify('Restored'); this.backups.open = false; const k = this.backups.key; if (k === 'schema') { await this.loadSchema(); this.schemaDraft = JSON.parse(JSON.stringify(this.schema)); } else if (k === 'validation') { await this.loadValidation(); } else if (k === 'sections') { await this.loadSections(); } } catch (e) { this.notify(e.message, true); } },
+
+        // ── CASCADE ORDER EDITOR ──
+        cascadeDraft: { order: [] }, cascadeSearch: '',
+        async loadCascade() { try { const r = await this.api('/config/cascade'); this.cascadeDraft = { order: [...r.order] }; } catch (e) { this.notify(e.message, true); } },
+        async saveCascade() { try { await this.api('/config/cascade', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ order: this.cascadeDraft.order }) }); this.notify('Cascade order saved'); } catch (e) { this.notify(e.message, true); } },
+        async resetCascade() { if (!confirm('Reset cascade to default order?')) return; try { const r = await this.api('/config/cascade/reset', { method: 'POST' }); this.cascadeDraft = { order: [...r.order] }; this.notify('Cascade reset'); } catch (e) { this.notify(e.message, true); } },
+        addEngine(engine) { if (!this.cascadeDraft.order.includes(engine)) { this.cascadeDraft.order.push(engine); } },
+        removeEngine(engine) { const idx = this.cascadeDraft.order.indexOf(engine); if (idx >= 0) this.cascadeDraft.order.splice(idx, 1); },
+        moveEngineUp(index) { if (index <= 0) return; const items = this.cascadeDraft.order.filter(e => e !== 'firecrawl');[items[index - 1], items[index]] = [items[index], items[index - 1]]; this.cascadeDraft.order = ['firecrawl', ...items]; },
+        moveEngineDown(index) { const items = this.cascadeDraft.order.filter(e => e !== 'firecrawl'); if (index >= items.length - 1) return;[items[index], items[index + 1]] = [items[index + 1], items[index]]; this.cascadeDraft.order = ['firecrawl', ...items]; },
 
         // ── SECTIONS EDITOR ──
         async loadSections() { try { const r = await this.api('/config/sections'); this.sectionDraft = { aliases: JSON.parse(JSON.stringify(r.aliases)), targets: [...r.targets] }; } catch (e) { this.notify(e.message, true); } },
