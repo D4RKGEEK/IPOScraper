@@ -23,8 +23,9 @@ const { runFirecrawlExtraction } = require('./extract/firecrawl');
 const { mergeSectionResponses } = require('./extract/merge');
 const { normalize, isPlaceholder, withFields, validateFields } = require('./llm/schema');
 const { validateExtraction } = require('./validate');
-const { env } = require('./config');
+const { env, getCascadeOrder } = require('./config');
 const { resetUsage, getUsage } = require('./usage');
+const { runOpenAIExtraction } = require('./extract/openai');
 const { collections } = require('../db/mongo');
 const { findBySlug, reconcileExtractions } = require('../db/ipoRepository');
 const r2 = require('../storage/r2');
@@ -126,7 +127,7 @@ async function downloadPdf(url, outputDir, force = false) {
     await streamPipeline(res.body, fileStream);
   } catch (err) {
     if (fs.existsSync(localPath)) {
-      try { fs.unlinkSync(localPath); } catch (e) {}
+      try { fs.unlinkSync(localPath); } catch (e) { }
     }
     throw err;
   }
@@ -136,7 +137,7 @@ async function downloadPdf(url, outputDir, force = false) {
   // Validate size against content-length if provided to prevent caching truncated downloads
   if (!isNaN(contentLength) && stats.size < contentLength) {
     if (fs.existsSync(localPath)) {
-      try { fs.unlinkSync(localPath); } catch (e) {}
+      try { fs.unlinkSync(localPath); } catch (e) { }
     }
     throw new Error(`PDF download truncated: got ${stats.size} bytes of expected ${contentLength}`);
   }
@@ -205,7 +206,7 @@ async function convertSections(pdfPath, outputDir, ranges, logMsg) {
  */
 async function runExtraction(ipo, opts = {}) {
   let { pipeline = 'cascade', docType = 'auto', force = false } = opts;
-  const logMsg = opts.log || (() => {});
+  const logMsg = opts.log || (() => { });
 
   // Auto-pick pipeline
   if (!pipeline || pipeline === 'default' || pipeline === 'deepseek') {
@@ -247,286 +248,294 @@ async function runExtraction(ipo, opts = {}) {
   const engineErrors = {};
   try {
 
-  // ── Phase 0: Download PDF + content fingerprint ────────────────────────
-  logMsg(`downloading ${docType} PDF...`);
-  const pdfPath = await downloadPdf(pdfUrl, outputDir, force);
-  const contentHash = sha256File(pdfPath);
-  const sameContent = !!(existing && existing.contentHash === contentHash);
+    // ── Phase 0: Download PDF + content fingerprint ────────────────────────
+    logMsg(`downloading ${docType} PDF...`);
+    const pdfPath = await downloadPdf(pdfUrl, outputDir, force);
+    const contentHash = sha256File(pdfPath);
+    const sameContent = !!(existing && existing.contentHash === contentHash);
 
-  // ── Dedup short-circuit ────────────────────────────────────────────────
-  // Byte-identical document already extracted successfully → reuse the stored
-  // result and skip the expensive convert + LLM cascade entirely.
-  if (sameContent && existing.status !== 'failed' && existing.result) {
-    logMsg('document unchanged (content hash match) — reusing previous extraction');
-    if (process.env.NODE_ENV === 'production') {
-      try { fs.rmSync(outputDir, { recursive: true, force: true }); } catch (e) {}
+    // ── Dedup short-circuit ────────────────────────────────────────────────
+    // Byte-identical document already extracted successfully → reuse the stored
+    // result and skip the expensive convert + LLM cascade entirely.
+    if (sameContent && existing.status !== 'failed' && existing.result) {
+      logMsg('document unchanged (content hash match) — reusing previous extraction');
+      if (process.env.NODE_ENV === 'production') {
+        try { fs.rmSync(outputDir, { recursive: true, force: true }); } catch (e) { }
+      }
+      try { await reconcileExtractions(ipo.slug); } catch (e) { log.warn({ err: e.message }, 'reconcile after cache hit failed'); }
+      return {
+        slug: ipo.slug,
+        docType,
+        pipeline,
+        sections: Object.fromEntries(
+          Object.entries(existing.sections || {}).map(([k, v]) => [k, v && v.method]),
+        ),
+        result: existing.result,
+        validation: existing.validation || null,
+        usage: getUsage(),
+        cached: true,
+      };
     }
-    try { await reconcileExtractions(ipo.slug); } catch (e) { log.warn({ err: e.message }, 'reconcile after cache hit failed'); }
+
+    // ── Phase 1–2: reuse cached markdown only if it matches THIS content ────
+    // Existence isn't enough — stale markdown from a since-changed PDF must not
+    // be reused. The content hash gates it: same bytes → the cached markdown is
+    // still valid, so skip the locate + convert.
+    const cachedMd = sameContent ? await r2.getMarkdown(ipo.slug, docType) : null;
+    if (cachedMd) {
+      logMsg('reusing cached markdown (content unchanged) — skipping convert');
+      const parts = splitMergedMarkdown(cachedMd);
+      for (const { name, content } of parts) {
+        fs.writeFileSync(path.join(outputDir, `${name}.md`), content, 'utf8');
+      }
+      converted = parts.map((p) => p.name);
+      ranges = Object.fromEntries(converted.map((name) => [name, { method: 'cached' }]));
+      logMsg(`rehydrated ${converted.length} cached sections: ${converted.join(', ')}`);
+    } else {
+      // ── Phase 1: LOCATE sections ─────────────────────────────────────────
+      phase = 'locate';
+      logMsg('locating sections...');
+      ranges = await getSectionRanges(pdfPath, undefined, logMsg);
+
+      const foundSections = Object.entries(ranges)
+        .filter(([, v]) => v.range)
+        .map(([k]) => k);
+
+      logMsg(`found ${foundSections.length} sections: ${foundSections.join(', ')}`);
+
+      // ── Phase 2: CONVERT pages → markdown ────────────────────────────────
+      phase = 'convert';
+      logMsg('converting pages to markdown...');
+      converted = await convertSections(pdfPath, outputDir, ranges, logMsg);
+
+      // Cache the merged markdown so an unchanged-content re-run skips convert.
+      if (r2.isEnabled() && converted.length) {
+        try {
+          const mergedParts = converted.map((name) => ({
+            name,
+            content: fs.readFileSync(path.join(outputDir, `${name}.md`), 'utf8'),
+          }));
+          await r2.putMarkdown(ipo.slug, docType, serializeMergedMarkdown(mergedParts));
+          logMsg('cached merged markdown to R2');
+        } catch (e) {
+          log.warn({ err: e.message }, 'failed to cache markdown to R2');
+        }
+      }
+    }
+
+    // ── Phase 3: EXTRACT structured data ───────────────────────────────────
+    phase = 'extract';
+    const results = {};
+    let finalResult = null;
+    let extractionStatus = 'completed';
+
+    if (pipeline === 'cascade') {
+      const cascade = getCascadeOrder();
+      logMsg(`running Cascade extraction with order: ${cascade.join(' > ')}...`);
+
+      // Firecrawl is always first (primary extraction)
+      logMsg('1/4: running Firecrawl extraction...');
+      try {
+        const sectionResponses = await runFirecrawlExtraction(outputDir, converted, ipo.slug, logMsg);
+        results.firecrawl = mergeSectionResponses(sectionResponses);
+
+        const fcPath = path.join(outputDir, 'summary_firecrawl.json');
+        fs.writeFileSync(fcPath, JSON.stringify(results.firecrawl, null, 2), 'utf8');
+        logMsg('Firecrawl extraction complete');
+      } catch (e) {
+        log.warn({ err: e.message }, 'Firecrawl extraction failed');
+        logMsg(`Firecrawl extraction failed: ${e.message}`);
+        results.firecrawl = null;
+        engineErrors.firecrawl = e.message;
+      }
+
+      // Use Firecrawl if proper, else try fallbacks in configured order
+      let currentFallback = results.firecrawl;
+      if (isExtractionProper(currentFallback)) {
+        logMsg('Firecrawl extraction is proper. Completed.');
+        finalResult = currentFallback;
+      } else {
+        logMsg('Firecrawl result incomplete/not proper. Flagging for review and falling back...');
+        extractionStatus = 'review';
+
+        // Try fallbacks in configured order (gemini, deepseek, openai)
+        let fallbackIndex = 1;
+        for (const engine of cascade) {
+          if (engine === 'firecrawl') continue; // Already tried
+
+          fallbackIndex++;
+          logMsg(`${fallbackIndex}/4: running ${engine} extraction fallback...`);
+          try {
+            let result;
+            if (engine === 'gemini') {
+              result = await runGeminiExtraction(outputDir, converted);
+            } else if (engine === 'deepseek') {
+              result = await runDeepSeekExtraction(outputDir, converted);
+            } else if (engine === 'openai') {
+              result = await runOpenAIExtraction(outputDir, converted);
+            }
+
+            results[engine] = result;
+            logMsg(`${engine} extraction complete`);
+
+            if (isExtractionProper(result)) {
+              logMsg(`${engine} fallback result is proper.`);
+              finalResult = result;
+              break;
+            }
+          } catch (e) {
+            log.error({ err: e.message }, `${engine} fallback failed`);
+            logMsg(`${engine} fallback failed: ${e.message}`);
+            results[engine] = null;
+            engineErrors[engine] = e.message;
+          }
+        }
+
+        // Use best available result from fallback chain
+        if (!finalResult) {
+          finalResult = results.gemini || results.deepseek || results.openai || results.firecrawl || null;
+        }
+      }
+    } else {
+      // Standard pipelines
+      if (pipeline === 'gemini' || pipeline === 'both') {
+        logMsg('running Gemini extraction...');
+        try {
+          results.gemini = await runGeminiExtraction(outputDir, converted);
+          logMsg('Gemini extraction complete');
+        } catch (e) {
+          log.error({ err: e.message }, 'Gemini extraction failed');
+          logMsg(`Gemini extraction failed: ${e.message}`);
+          results.gemini = null;
+          engineErrors.gemini = e.message;
+        }
+      }
+
+      if (pipeline === 'firecrawl' || pipeline === 'both') {
+        logMsg('running Firecrawl extraction...');
+        try {
+          const sectionResponses = await runFirecrawlExtraction(outputDir, converted, ipo.slug, logMsg);
+          results.firecrawl = mergeSectionResponses(sectionResponses);
+
+          // Save merged result
+          const fcPath = path.join(outputDir, 'summary_firecrawl.json');
+          fs.writeFileSync(fcPath, JSON.stringify(results.firecrawl, null, 2), 'utf8');
+          logMsg('Firecrawl extraction complete');
+        } catch (e) {
+          log.error({ err: e.message }, 'Firecrawl extraction failed');
+          logMsg(`Firecrawl extraction failed: ${e.message}`);
+          results.firecrawl = null;
+          engineErrors.firecrawl = e.message;
+        }
+      }
+
+      finalResult = pipeline === 'both' ? results : (results[pipeline] || null);
+    }
+
+    // ── Normalize to the canonical schema shape ────────────────────────────
+    // Force whichever engine won into the exact format defined in llm/schema.js:
+    // every field present, extra keys dropped, missing scalars → "[-]", missing
+    // lists → []. This is what guarantees a consistent output regardless of which
+    // engine (Firecrawl / Gemini / DeepSeek) produced the data.
+    let validation = null;
+    if (finalResult) {
+      if (pipeline === 'both') {
+        if (finalResult.gemini) finalResult.gemini = normalize(finalResult.gemini);
+        if (finalResult.firecrawl) finalResult.firecrawl = normalize(finalResult.firecrawl);
+      } else {
+        finalResult = normalize(finalResult);
+
+        // ── Validate: score the result and set the review status from it ──────
+        // The score (vs the dashboard-editable ruleset) supersedes the coarse
+        // isExtractionProper() gate used above for engine selection. Below the
+        // below threshold → 'review' so a human can correct it (this is the
+        // status the dashboard review queue, KPI and resolve button all key on).
+        validation = validateExtraction(finalResult, ipo);
+        extractionStatus = validation.status === 'pass' ? 'completed' : 'review';
+        logMsg(`validation score ${validation.score}/100 → ${extractionStatus}` +
+          (validation.failed ? ` (${validation.failed} rule(s) failed)` : ''));
+      }
+    } else {
+      extractionStatus = 'failed';
+    }
+
+    // ── Save to MongoDB ────────────────────────────────────────────────────
+    // A failed extraction has no usable result, so it doesn't get a markdown
+    // pointer (and the orphan markdown is purged below).
+    phase = 'save';
+    const r2Url = (r2.isEnabled() && extractionStatus !== 'failed') ? r2.mdKey(ipo.slug, docType) : null;
+    const extractionDoc = {
+      ipoSlug: ipo.slug,
+      docType,
+      pipeline,
+      pdfUrl,
+      contentHash,
+      sections: ranges,
+      result: finalResult,
+      validation,
+      usage: getUsage(),
+      status: extractionStatus,
+      superseded: false,
+      markdownKey: r2Url,
+      // engineErrors is {} on a clean run; populated when an engine in the cascade
+      // failed but a later one succeeded — surfaces partial degradation in the UI.
+      engineErrors,
+      extractedAt: new Date().toISOString(),
+    };
+
+    await collections.extractions().updateOne(
+      { ipoSlug: ipo.slug, docType, pipeline },
+      { $set: extractionDoc },
+      { upsert: true },
+    );
+
+    logMsg('extraction saved to MongoDB');
+
+    // A failed run may have uploaded markdown during convert but produced no
+    // usable result — purge it so it doesn't orphan in R2.
+    if (extractionStatus === 'failed' && r2.isEnabled()) {
+      await r2.deleteMarkdown(ipo.slug, docType);
+      logMsg('purged orphan markdown for failed extraction');
+    }
+
+    // Record the content fingerprint (+ cached-markdown pointer) on the IPO's
+    // document entry — surfaces same-bytes dedup across docTypes (e.g. an "RHP"
+    // that's really the DRHP re-listed shows an identical hash).
+    const docSet = { [`documents.${docType}.hash`]: contentHash };
+    if (r2Url) docSet[`documents.${docType}.r2Url`] = r2Url;
+    await collections.ipos().updateOne({ slug: ipo.slug }, { $set: docSet });
+
+    // Mark superseded docs + denormalize the current-extraction pointer onto the IPO.
+    try {
+      await reconcileExtractions(ipo.slug);
+      logMsg('reconciled extraction supersession state');
+    } catch (e) {
+      log.warn({ err: e.message }, 'reconcileExtractions failed');
+    }
+
+    // Clean up temp files in production (ephemeral filesystem)
+    if (process.env.NODE_ENV === 'production') {
+      try {
+        fs.rmSync(outputDir, { recursive: true, force: true });
+        logMsg('cleaned up temp files');
+      } catch (e) {
+        log.warn({ err: e.message }, 'temp cleanup failed');
+      }
+    }
+
+    log.info({ slug: ipo.slug, docType, pipeline }, 'extraction pipeline complete');
+
     return {
       slug: ipo.slug,
       docType,
       pipeline,
       sections: Object.fromEntries(
-        Object.entries(existing.sections || {}).map(([k, v]) => [k, v && v.method]),
+        Object.entries(ranges).map(([k, v]) => [k, v.method]),
       ),
-      result: existing.result,
-      validation: existing.validation || null,
+      result: finalResult,
+      validation,
       usage: getUsage(),
-      cached: true,
     };
-  }
-
-  // ── Phase 1–2: reuse cached markdown only if it matches THIS content ────
-  // Existence isn't enough — stale markdown from a since-changed PDF must not
-  // be reused. The content hash gates it: same bytes → the cached markdown is
-  // still valid, so skip the locate + convert.
-  const cachedMd = sameContent ? await r2.getMarkdown(ipo.slug, docType) : null;
-  if (cachedMd) {
-    logMsg('reusing cached markdown (content unchanged) — skipping convert');
-    const parts = splitMergedMarkdown(cachedMd);
-    for (const { name, content } of parts) {
-      fs.writeFileSync(path.join(outputDir, `${name}.md`), content, 'utf8');
-    }
-    converted = parts.map((p) => p.name);
-    ranges = Object.fromEntries(converted.map((name) => [name, { method: 'cached' }]));
-    logMsg(`rehydrated ${converted.length} cached sections: ${converted.join(', ')}`);
-  } else {
-    // ── Phase 1: LOCATE sections ─────────────────────────────────────────
-    phase = 'locate';
-    logMsg('locating sections...');
-    ranges = await getSectionRanges(pdfPath, undefined, logMsg);
-
-    const foundSections = Object.entries(ranges)
-      .filter(([, v]) => v.range)
-      .map(([k]) => k);
-
-    logMsg(`found ${foundSections.length} sections: ${foundSections.join(', ')}`);
-
-    // ── Phase 2: CONVERT pages → markdown ────────────────────────────────
-    phase = 'convert';
-    logMsg('converting pages to markdown...');
-    converted = await convertSections(pdfPath, outputDir, ranges, logMsg);
-
-    // Cache the merged markdown so an unchanged-content re-run skips convert.
-    if (r2.isEnabled() && converted.length) {
-      try {
-        const mergedParts = converted.map((name) => ({
-          name,
-          content: fs.readFileSync(path.join(outputDir, `${name}.md`), 'utf8'),
-        }));
-        await r2.putMarkdown(ipo.slug, docType, serializeMergedMarkdown(mergedParts));
-        logMsg('cached merged markdown to R2');
-      } catch (e) {
-        log.warn({ err: e.message }, 'failed to cache markdown to R2');
-      }
-    }
-  }
-
-  // ── Phase 3: EXTRACT structured data ───────────────────────────────────
-  phase = 'extract';
-  const results = {};
-  let finalResult = null;
-  let extractionStatus = 'completed';
-
-  if (pipeline === 'cascade') {
-    logMsg('running Cascade extraction (Firecrawl with fallback)...');
-    
-    // 1. Try Firecrawl first
-    logMsg('1/3: running Firecrawl extraction...');
-    try {
-      const sectionResponses = await runFirecrawlExtraction(outputDir, converted, ipo.slug, logMsg);
-      results.firecrawl = mergeSectionResponses(sectionResponses);
-
-      // Save merged result
-      const fcPath = path.join(outputDir, 'summary_firecrawl.json');
-      fs.writeFileSync(fcPath, JSON.stringify(results.firecrawl, null, 2), 'utf8');
-      logMsg('Firecrawl extraction complete');
-    } catch (e) {
-      log.warn({ err: e.message }, 'Firecrawl extraction failed');
-      logMsg(`Firecrawl extraction failed: ${e.message}`);
-      results.firecrawl = null;
-      engineErrors.firecrawl = e.message;
-    }
-
-    if (isExtractionProper(results.firecrawl)) {
-      logMsg('Firecrawl extraction is proper. Completed.');
-      finalResult = results.firecrawl;
-    } else {
-      logMsg('Firecrawl result incomplete/not proper. Flagging for review and falling back...');
-      extractionStatus = 'review';
-      
-      // 2. Try Gemini fallback
-      logMsg('2/3: running Gemini extraction fallback...');
-      try {
-        results.gemini = await runGeminiExtraction(outputDir, converted);
-        logMsg('Gemini extraction complete');
-      } catch (e) {
-        log.warn({ err: e.message }, 'Gemini fallback failed');
-        logMsg(`Gemini fallback failed: ${e.message}`);
-        results.gemini = null;
-        engineErrors.gemini = e.message;
-      }
-
-      if (isExtractionProper(results.gemini)) {
-        logMsg('Gemini fallback result is proper.');
-        finalResult = results.gemini;
-      } else {
-        // 3. Try DeepSeek fallback
-        logMsg('3/3: running DeepSeek extraction fallback...');
-        try {
-          results.deepseek = await runDeepSeekExtraction(outputDir, converted);
-          logMsg('DeepSeek extraction complete');
-        } catch (e) {
-          log.error({ err: e.message }, 'DeepSeek fallback failed');
-          logMsg(`DeepSeek fallback failed: ${e.message}`);
-          results.deepseek = null;
-          engineErrors.deepseek = e.message;
-        }
-        
-        // Use best available result
-        finalResult = results.deepseek || results.gemini || results.firecrawl || null;
-      }
-    }
-  } else {
-    // Standard pipelines
-    if (pipeline === 'gemini' || pipeline === 'both') {
-      logMsg('running Gemini extraction...');
-      try {
-        results.gemini = await runGeminiExtraction(outputDir, converted);
-        logMsg('Gemini extraction complete');
-      } catch (e) {
-        log.error({ err: e.message }, 'Gemini extraction failed');
-        logMsg(`Gemini extraction failed: ${e.message}`);
-        results.gemini = null;
-        engineErrors.gemini = e.message;
-      }
-    }
-
-    if (pipeline === 'firecrawl' || pipeline === 'both') {
-      logMsg('running Firecrawl extraction...');
-      try {
-        const sectionResponses = await runFirecrawlExtraction(outputDir, converted, ipo.slug, logMsg);
-        results.firecrawl = mergeSectionResponses(sectionResponses);
-
-        // Save merged result
-        const fcPath = path.join(outputDir, 'summary_firecrawl.json');
-        fs.writeFileSync(fcPath, JSON.stringify(results.firecrawl, null, 2), 'utf8');
-        logMsg('Firecrawl extraction complete');
-      } catch (e) {
-        log.error({ err: e.message }, 'Firecrawl extraction failed');
-        logMsg(`Firecrawl extraction failed: ${e.message}`);
-        results.firecrawl = null;
-        engineErrors.firecrawl = e.message;
-      }
-    }
-
-    finalResult = pipeline === 'both' ? results : (results[pipeline] || null);
-  }
-
-  // ── Normalize to the canonical schema shape ────────────────────────────
-  // Force whichever engine won into the exact format defined in llm/schema.js:
-  // every field present, extra keys dropped, missing scalars → "[-]", missing
-  // lists → []. This is what guarantees a consistent output regardless of which
-  // engine (Firecrawl / Gemini / DeepSeek) produced the data.
-  let validation = null;
-  if (finalResult) {
-    if (pipeline === 'both') {
-      if (finalResult.gemini) finalResult.gemini = normalize(finalResult.gemini);
-      if (finalResult.firecrawl) finalResult.firecrawl = normalize(finalResult.firecrawl);
-    } else {
-      finalResult = normalize(finalResult);
-
-      // ── Validate: score the result and set the review status from it ──────
-      // The score (vs the dashboard-editable ruleset) supersedes the coarse
-      // isExtractionProper() gate used above for engine selection. Below the
-      // below threshold → 'review' so a human can correct it (this is the
-      // status the dashboard review queue, KPI and resolve button all key on).
-      validation = validateExtraction(finalResult, ipo);
-      extractionStatus = validation.status === 'pass' ? 'completed' : 'review';
-      logMsg(`validation score ${validation.score}/100 → ${extractionStatus}` +
-        (validation.failed ? ` (${validation.failed} rule(s) failed)` : ''));
-    }
-  } else {
-    extractionStatus = 'failed';
-  }
-
-  // ── Save to MongoDB ────────────────────────────────────────────────────
-  // A failed extraction has no usable result, so it doesn't get a markdown
-  // pointer (and the orphan markdown is purged below).
-  phase = 'save';
-  const r2Url = (r2.isEnabled() && extractionStatus !== 'failed') ? r2.mdKey(ipo.slug, docType) : null;
-  const extractionDoc = {
-    ipoSlug: ipo.slug,
-    docType,
-    pipeline,
-    pdfUrl,
-    contentHash,
-    sections: ranges,
-    result: finalResult,
-    validation,
-    usage: getUsage(),
-    status: extractionStatus,
-    superseded: false,
-    markdownKey: r2Url,
-    // engineErrors is {} on a clean run; populated when an engine in the cascade
-    // failed but a later one succeeded — surfaces partial degradation in the UI.
-    engineErrors,
-    extractedAt: new Date().toISOString(),
-  };
-
-  await collections.extractions().updateOne(
-    { ipoSlug: ipo.slug, docType, pipeline },
-    { $set: extractionDoc },
-    { upsert: true },
-  );
-
-  logMsg('extraction saved to MongoDB');
-
-  // A failed run may have uploaded markdown during convert but produced no
-  // usable result — purge it so it doesn't orphan in R2.
-  if (extractionStatus === 'failed' && r2.isEnabled()) {
-    await r2.deleteMarkdown(ipo.slug, docType);
-    logMsg('purged orphan markdown for failed extraction');
-  }
-
-  // Record the content fingerprint (+ cached-markdown pointer) on the IPO's
-  // document entry — surfaces same-bytes dedup across docTypes (e.g. an "RHP"
-  // that's really the DRHP re-listed shows an identical hash).
-  const docSet = { [`documents.${docType}.hash`]: contentHash };
-  if (r2Url) docSet[`documents.${docType}.r2Url`] = r2Url;
-  await collections.ipos().updateOne({ slug: ipo.slug }, { $set: docSet });
-
-  // Mark superseded docs + denormalize the current-extraction pointer onto the IPO.
-  try {
-    await reconcileExtractions(ipo.slug);
-    logMsg('reconciled extraction supersession state');
-  } catch (e) {
-    log.warn({ err: e.message }, 'reconcileExtractions failed');
-  }
-
-  // Clean up temp files in production (ephemeral filesystem)
-  if (process.env.NODE_ENV === 'production') {
-    try {
-      fs.rmSync(outputDir, { recursive: true, force: true });
-      logMsg('cleaned up temp files');
-    } catch (e) {
-      log.warn({ err: e.message }, 'temp cleanup failed');
-    }
-  }
-
-  log.info({ slug: ipo.slug, docType, pipeline }, 'extraction pipeline complete');
-
-  return {
-    slug: ipo.slug,
-    docType,
-    pipeline,
-    sections: Object.fromEntries(
-      Object.entries(ranges).map(([k, v]) => [k, v.method]),
-    ),
-    result: finalResult,
-    validation,
-    usage: getUsage(),
-  };
 
   } catch (err) {
     // ── Failure transparency ──────────────────────────────────────────────
@@ -542,12 +551,14 @@ async function runExtraction(ipo, opts = {}) {
       } else {
         await collections.extractions().updateOne(
           { ipoSlug: ipo.slug, docType, pipeline },
-          { $set: {
-            ipoSlug: ipo.slug, docType, pipeline, pdfUrl,
-            status: 'failed', error: err.message, failedPhase: phase,
-            partial: { converted: converted || [], engineErrors },
-            result: null, validation: null, superseded: false, extractedAt: now,
-          } },
+          {
+            $set: {
+              ipoSlug: ipo.slug, docType, pipeline, pdfUrl,
+              status: 'failed', error: err.message, failedPhase: phase,
+              partial: { converted: converted || [], engineErrors },
+              result: null, validation: null, superseded: false, extractedAt: now,
+            }
+          },
           { upsert: true });
       }
     } catch (e2) {
@@ -573,7 +584,7 @@ async function runExtraction(ipo, opts = {}) {
  * @returns {Promise<{ slug, docType, pipeline, result, validation, usedCache, usage }>}
  */
 async function testSchemaOnIpo(ipo, opts = {}) {
-  const logMsg = opts.log || (() => {});
+  const logMsg = opts.log || (() => { });
   let { docType = 'auto', pipeline = 'gemini' } = opts;
   if (!['gemini', 'firecrawl'].includes(pipeline)) pipeline = 'gemini'; // single engine for a deterministic preview
   if (!opts.fields || typeof opts.fields !== 'object') throw new Error('fields (the schema to test) is required');
@@ -589,7 +600,7 @@ async function testSchemaOnIpo(ipo, opts = {}) {
 
   resetUsage();
   const outputDir = path.join(env.OUTPUT_DIR, '__schema_test__', ipo.slug);
-  try { fs.rmSync(outputDir, { recursive: true, force: true }); } catch (e) {}
+  try { fs.rmSync(outputDir, { recursive: true, force: true }); } catch (e) { }
   fs.mkdirSync(outputDir, { recursive: true });
 
   // Prefer cached markdown so a test is a single LLM call (no download/convert).
@@ -623,7 +634,7 @@ async function testSchemaOnIpo(ipo, opts = {}) {
     return { result, validation };
   });
 
-  try { fs.rmSync(outputDir, { recursive: true, force: true }); } catch (e) {}
+  try { fs.rmSync(outputDir, { recursive: true, force: true }); } catch (e) { }
   logMsg(`done — validation score ${out.validation?.score}/100 (this was a test; nothing was saved)`);
   return { slug: ipo.slug, docType, pipeline, usedCache, fieldCount: Object.keys(candidate).length, ...out, usage: getUsage() };
 }
@@ -640,7 +651,7 @@ async function testSchemaOnIpo(ipo, opts = {}) {
  */
 async function runBulkExtraction(opts = {}) {
   let { pipeline = 'cascade', docType = 'auto', status } = opts;
-  const logMsg = opts.log || (() => {});
+  const logMsg = opts.log || (() => { });
 
   // Auto-pick pipeline
   if (!pipeline || pipeline === 'default' || pipeline === 'deepseek') {

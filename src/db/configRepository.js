@@ -17,6 +17,7 @@ const { collections } = require('./mongo');
 const schemaStore = require('../extraction/llm/schema');
 const sectionConfig = require('../extraction/config');
 const validation = require('../extraction/validate');
+const { getCascadeOrder, setCascadeOrder, resetCascade, getDefaultCascade } = require('../extraction/config');
 const { logger } = require('../utils/logger');
 
 const log = logger.child({ module: 'config-repo' });
@@ -66,6 +67,19 @@ async function loadConfig() {
     }
   } catch (e) {
     log.warn({ err: e.message }, 'persisted validation rules invalid; keeping built-in default');
+  }
+
+  // ── Cascade order ─────────────────────────────────────────────────────────
+  try {
+    const doc = await collections.config().findOne({ _id: 'cascade' });
+    if (doc && doc.order) {
+      setCascadeOrder(doc.order);
+      log.info({ order: getCascadeOrder() }, 'loaded persisted cascade order');
+    } else {
+      log.info('no persisted cascade; using built-in default');
+    }
+  } catch (e) {
+    log.warn({ err: e.message }, 'persisted cascade invalid; keeping built-in default');
   }
 }
 
@@ -190,6 +204,37 @@ async function resetSections() {
 }
 
 /**
+ * Validate + apply + persist cascade order. Throws (without persisting) if invalid.
+ * @param {string[]} order  Array of engine names (e.g., ['firecrawl', 'gemini', 'deepseek', 'openai'])
+ * @returns {Promise<string[]>} The applied order
+ */
+async function saveCascade(order, reason = 'edit') {
+  setCascadeOrder(order); // validates first
+  await backupConfig('cascade', reason);
+  await collections.config().updateOne(
+    { _id: 'cascade' },
+    {
+      $set: {
+        order: getCascadeOrder(),
+        updatedAt: new Date().toISOString(),
+      },
+    },
+    { upsert: true },
+  );
+  log.info({ order: getCascadeOrder() }, 'cascade saved');
+  return getCascadeOrder();
+}
+
+/** Reset cascade to defaults and clear the persisted override. */
+async function resetCascadeOrder() {
+  const defaultCascade = getDefaultCascade();
+  resetCascade(); // calls the resetCascade from config.js
+  await collections.config().deleteOne({ _id: 'cascade' });
+  log.info('cascade reset to default');
+  return { order: getCascadeOrder(), defaults: defaultCascade };
+}
+
+/**
  * Validate + apply + persist the validation ruleset (and optional threshold).
  * Throws (without persisting) if the candidate is invalid.
  * @param {object} opts
@@ -221,6 +266,7 @@ module.exports = {
   loadConfig,
   saveSchema, resetSchema,
   saveSections, resetSections,
+  saveCascade, resetCascadeOrder,
   saveValidation, resetValidation,
   backupConfig, listBackups, restoreBackup,
 };

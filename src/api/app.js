@@ -72,7 +72,7 @@ function buildApp(opts = {}) {
   let heavyLane = Promise.resolve();
   const runOnHeavyLane = (fn) => {
     const next = heavyLane.then(fn, fn); // run regardless of prior outcome
-    heavyLane = next.catch(() => {});    // a failure must not break the chain
+    heavyLane = next.catch(() => { });    // a failure must not break the chain
     return next;
   };
 
@@ -102,7 +102,7 @@ function buildApp(opts = {}) {
     // Heavy jobs queue on the single-slot lane; light jobs run immediately.
     const exec = longOp ? () => runOnHeavyLane(work) : work;
     if (longOp && !wait) {
-      exec().catch(() => {}); // tracked via the job; errors recorded there
+      exec().catch(() => { }); // tracked via the job; errors recorded there
       return res.status(202).json({ jobId, status: 'running', poll: `/jobs/${jobId}` });
     }
     const result = await exec();
@@ -234,6 +234,25 @@ function buildApp(opts = {}) {
     res.json(await configRepo.resetSections());
   }));
 
+  // GET /config/cascade — current cascade order.
+  app.get('/config/cascade', (_req, res) => {
+    res.json({
+      order: sectionConfig.getCascadeOrder(),
+      defaults: sectionConfig.getDefaultCascade(),
+    });
+  });
+
+  // PUT /config/cascade — update cascade order. Body: { order: ['engine1', 'engine2', ...] }
+  app.put('/config/cascade', cfgH(async (req, res) => {
+    const order = req.body?.order;
+    res.json({ order: await configRepo.saveCascade(order) });
+  }));
+
+  // POST /config/cascade/reset — restore default cascade order.
+  app.post('/config/cascade/reset', cfgH(async (_req, res) => {
+    res.json(await configRepo.resetCascade());
+  }));
+
   // ── Validation rules (dashboard-editable, like the schema) ─────────────────
 
   // GET /validation — current ruleset + threshold + defaults + type metadata.
@@ -349,11 +368,13 @@ function buildApp(opts = {}) {
         { $project: { _id: 0, slug: 1, companyName: 1, status: 1, gmp: '$gmp.value', gmpPct: '$gmp.percentage' } },
         { $sort: { gmp: -1 } }, { $limit: 8 },
       ]).toArray(), []),
-      safe(ipos.aggregate([{ $group: {
-        _id: null,
-        drhp: { $sum: { $cond: [{ $ifNull: ['$documents.drhp.url', false] }, 1, 0] } },
-        rhp: { $sum: { $cond: [{ $ifNull: ['$documents.rhp.url', false] }, 1, 0] } },
-      } }]).toArray(), []),
+      safe(ipos.aggregate([{
+        $group: {
+          _id: null,
+          drhp: { $sum: { $cond: [{ $ifNull: ['$documents.drhp.url', false] }, 1, 0] } },
+          rhp: { $sum: { $cond: [{ $ifNull: ['$documents.rhp.url', false] }, 1, 0] } },
+        }
+      }]).toArray(), []),
       safe(collections.extractions().aggregate([{ $group: { _id: '$status', count: { $sum: 1 } } }]).toArray(), []),
       safe(collections.extractions().aggregate([{ $group: { _id: '$pipeline', count: { $sum: 1 } } }]).toArray(), []),
       safe(collections.jobs().find({}).sort({ createdAt: -1 }).limit(400).project({ type: 1, status: 1, createdAt: 1 }).toArray(), []),
@@ -450,9 +471,9 @@ function buildApp(opts = {}) {
   app.post('/ipos/:slug/extract', asyncH(async (req, res) => {
     const ipo = await findBySlug(req.params.slug);
     if (!ipo) return res.status(404).json({ error: 'IPO not found', slug: req.params.slug });
-    
+
     let { pipeline = 'cascade', docType = 'auto', force = false, wait = false } = req.body || {};
-    
+
     // Auto-pick pipeline
     if (pipeline === 'deepseek' || pipeline === 'default') {
       pipeline = 'cascade';
@@ -482,7 +503,7 @@ function buildApp(opts = {}) {
   // POST /ipos/extract — bulk extract all IPOs that have documents
   app.post('/ipos/extract', asyncH(async (req, res) => {
     let { pipeline = 'cascade', docType = 'auto', status, force = false, wait = false } = req.body || {};
-    
+
     // Auto-pick pipeline
     if (pipeline === 'deepseek' || pipeline === 'default') {
       pipeline = 'cascade';

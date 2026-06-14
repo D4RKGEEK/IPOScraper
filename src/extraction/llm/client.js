@@ -13,10 +13,44 @@
 
 const { env } = require('../config');
 const { generateCacheKey, getCachedResponse, setCachedResponse } = require('../cache');
-const { recordGeminiUsage, recordDeepSeekUsage } = require('../usage');
+const { recordGeminiUsage, recordDeepSeekUsage, recordOpenAIUsage } = require('../usage');
 const { logger } = require('../../utils/logger');
 
 const log = logger.child({ module: 'extraction:llm' });
+
+// ── OpenAI Client ─────────────────────────────────────────────────────────────
+
+async function callOpenAI(prompt, maxTokens = 2000, model = env.OPENAI_MODEL) {
+  if (!model) {
+    throw new Error('OPENAI_MODEL is required (e.g., "gpt-4o-mini")');
+  }
+
+  const res = await fetch('https://api.openai.com/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${env.OPENAI_API_KEY}`,
+    },
+    body: JSON.stringify({
+      model: model,
+      messages: [
+        { role: 'system', content: 'You output strictly valid JSON without markdown formatting.' },
+        { role: 'user', content: prompt },
+      ],
+      response_format: { type: 'json_object' },
+      max_tokens: maxTokens,
+    }),
+  });
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(`OpenAI API ${res.status}: ${body.slice(0, 200)}`);
+  }
+  const data = await res.json();
+  const text = data.choices?.[0]?.message?.content;
+  if (!text) throw new Error('OpenAI returned empty content');
+  recordOpenAIUsage(data.usage, data.model);
+  return JSON.parse(text);
+}
 
 // ── DeepSeek (OpenAI-compatible) ─────────────────────────────────────────────
 
@@ -77,7 +111,9 @@ async function callGeminiFreeform(prompt, maxTokens = 2000) {
 }
 
 /**
- * Call an LLM for a JSON task. Gemini first (default), DeepSeek fallback.
+ * Call an LLM for a JSON task with configurable cascade order.
+ * Default cascade: Gemini → OpenAI → DeepSeek
+ * Can be overridden via OPENAI_MODEL env var.
  *
  * @param {string} prompt     The full prompt
  * @param {object} [opts]
@@ -97,28 +133,30 @@ async function callLlmJson(prompt, opts = {}) {
   }
 
   let result;
+  const fallbacks = [];
 
-  // Try Gemini first (default)
-  if (env.GEMINI_API_KEY) {
+  // Build fallback chain: always try Gemini first, then optionally OpenAI, then DeepSeek
+  if (env.GEMINI_API_KEY) fallbacks.push({ name: 'Gemini', fn: callGeminiFreeform });
+  if (env.OPENAI_API_KEY && env.OPENAI_MODEL) fallbacks.push({ name: 'OpenAI', fn: callOpenAI });
+  if (env.DEEPSEEK_API_KEY) fallbacks.push({ name: 'DeepSeek', fn: callDeepSeek });
+
+  if (fallbacks.length === 0) {
+    throw new Error('No LLM API keys configured (GEMINI_API_KEY, OPENAI_API_KEY, or DEEPSEEK_API_KEY)');
+  }
+
+  // Try each fallback in order
+  for (const { name, fn } of fallbacks) {
     try {
-      log.debug('calling Gemini');
-      result = await callGeminiFreeform(prompt, maxTokens);
-      log.debug('Gemini succeeded');
+      log.debug(`calling ${name}`);
+      result = await fn(prompt, maxTokens);
+      log.debug(`${name} succeeded`);
+      break;
     } catch (e) {
-      log.warn({ err: e.message }, 'Gemini failed, falling back to DeepSeek');
+      log.warn({ err: e.message, engine: name }, `${name} failed`);
     }
   }
 
-  // DeepSeek fallback
-  if (!result) {
-    if (!env.DEEPSEEK_API_KEY) throw new Error('No LLM API key available (Gemini failed, no DeepSeek key)');
-    log.debug('calling DeepSeek (fallback)');
-    result = await callDeepSeek(prompt, maxTokens);
-    log.debug('DeepSeek fallback succeeded');
-  }
-
-  // Guard against a model returning a literal `null`/non-object JSON, which would
-  // otherwise crash callers that do result[key] / Object.keys(result).
+  // Guard against a model returning a literal `null`/non-object JSON
   if (result === null || typeof result !== 'object') {
     throw new Error(`LLM returned non-object JSON (${result === null ? 'null' : typeof result})`);
   }

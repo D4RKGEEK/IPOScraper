@@ -87,12 +87,43 @@ function resetSections() {
   TARGET_SECTIONS = clone(DEFAULT_TARGET_SECTIONS);
 }
 
+// ── Default cascade order (when no custom order is set via env or dashboard) ──
+const DEFAULT_CASCADE = ['firecrawl', 'gemini', 'deepseek', 'openai'];
+
+// ── Runtime-mutable cascade config (default to DEFAULT_CASCADE) ──────────────
+let CASCADE_ORDER = [...DEFAULT_CASCADE];
+
+// Initialize cascade from env variable at import time
+const cascadeFromEnv = process.env.EXTRACTION_CASCADE;
+if (cascadeFromEnv) {
+  const parsed = cascadeFromEnv.split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
+  const cleaned = parsed.filter((e) => ['firecrawl', 'gemini', 'deepseek', 'openai'].includes(e));
+  CASCADE_ORDER = cleaned.length ? cleaned : [...DEFAULT_CASCADE];
+}
+
+const getCascadeOrder = () => CASCADE_ORDER;
+const setCascadeOrder = (candidate) => {
+  const validEngines = ['firecrawl', 'gemini', 'deepseek', 'openai'];
+  if (!Array.isArray(candidate) || !candidate.length) {
+    CASCADE_ORDER = [...DEFAULT_CASCADE];
+    return CASCADE_ORDER;
+  }
+  const cleaned = candidate.filter((e) => validEngines.includes(e));
+  CASCADE_ORDER = cleaned.length ? cleaned : [...DEFAULT_CASCADE];
+  return CASCADE_ORDER;
+};
+const resetCascade = () => { CASCADE_ORDER = [...DEFAULT_CASCADE]; };
+
 // ── Environment configuration ────────────────────────────────────────────────
 const env = {
   DEEPSEEK_API_KEY: process.env.DEEPSEEK_API_KEY || '',
   GEMINI_API_KEY: process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || '',
   FIRECRAWL_API_KEY: process.env.FIRECRAWL_API_KEY || '',
   FIRECRAWL_API_URL: process.env.FIRECRAWL_API_URL || 'https://api.firecrawl.dev/v2/parse',
+  OPENAI_API_KEY: process.env.OPENAI_API_KEY || '',
+  OPENAI_MODEL: process.env.OPENAI_MODEL || 'gpt-4o-mini',
+  // Cascade order: comma-separated list of engines to use (e.g., "firecrawl,gemini,openai")
+  EXTRACTION_CASCADE: process.env.EXTRACTION_CASCADE || 'firecrawl,gemini,deepseek,openai',
 
   // Python executable path (override if using a venv)
   PYTHON_BIN: (() => {
@@ -111,6 +142,11 @@ const env = {
 
 module.exports = {
   env,
+  // runtime-mutable cascade config
+  getCascadeOrder,
+  setCascadeOrder,
+  resetCascade,
+  getDefaultCascade: () => [...DEFAULT_CASCADE],
   // runtime-mutable section config
   getSectionAliases,
   getTargetSections,
