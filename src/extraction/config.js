@@ -40,7 +40,19 @@ const DEFAULT_SECTION_ALIASES = {
 };
 
 // ── Target sections (default set to extract) ─────────────────────────────────
-const DEFAULT_TARGET_SECTIONS = ["RISK_FACTORS", "CAPITAL_STRUCTURE", "OBJECTS_OF_THE_OFFER", "OUR_BUSINESS"];
+// Sections the pipeline locates, converts, and feeds to the LLM cascade.
+// RESTATED_FINANCIAL_STATEMENTS is required for multi-period financials tables
+// (4 years of PAT/revenue/net worth/etc.) — without it the LLM only sees
+// snippets scattered in other sections and hallucinates single-row data.
+const DEFAULT_TARGET_SECTIONS = [
+  "RISK_FACTORS",
+  "CAPITAL_STRUCTURE",
+  "OBJECTS_OF_THE_OFFER",
+  "OUR_BUSINESS",
+  "RESTATED_FINANCIAL_STATEMENTS",
+  "OTHER_FINANCIAL_INFORMATION",
+  "STATEMENT_OF_FINANCIAL_INDEBTEDNESS",
+];
 
 // ── Runtime-mutable section config ───────────────────────────────────────────
 // Both start as clones of the defaults but can be replaced at runtime via the

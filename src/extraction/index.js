@@ -89,7 +89,7 @@ PROSPECTUS TEXT:
 ${mergedText}`;
 
   log.info('calling DeepSeek structured extraction fallback');
-  const result = await callLlmJson(prompt, { maxTokens: 4000 });
+  const result = await callLlmJson(prompt, { maxTokens: 8000 });
 
   // Save result
   const resultPath = path.join(outputDir, 'summary_deepseek.json');

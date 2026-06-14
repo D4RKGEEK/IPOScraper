@@ -95,7 +95,7 @@ async function firecrawlParse(htmlPath, section, ipoSlug, logMsg) {
     formats: [{
       type: 'json',
       schema: getIpoDetailsSchema(),
-      prompt: 'Extract all available IPO details from this specific prospectus section. For any fields not found, return null.',
+      prompt: 'Extract all available IPO details from this specific prospectus section. For any fields not found, return null. For objectList fields (financials, kpis, reservations, subscription, peer_comparison, lot_size_options, objects_of_the_offer, recommendations) you MUST return one JSON object per row present in the source table — preserve every period, every category, every year. Do not summarize, do not pick a representative row, do not truncate. Return all rows.',
     }],
   };
 
